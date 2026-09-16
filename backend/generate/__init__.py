@@ -1,0 +1,1 @@
+"""Per-unit artifact generation."""
