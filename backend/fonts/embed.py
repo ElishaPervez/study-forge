@@ -52,3 +52,15 @@ def inject_fonts(html: str, css: str) -> str:
     if head is None:
         return html
     return html[: head.end()] + f"<style>{css}</style>" + html[head.end():]
+
+
+FONT_SPECS = (
+    FontSpec("Instrument Serif", 400, "instrument-serif-400.woff2"),
+    FontSpec("Geist", 600, "geist-600.woff2"),
+    FontSpec("Geist Mono", 400, "geist-mono-400.woff2"),
+)
+FONTS_DIR = Path("assets/fonts")
+
+
+def default_fonts_css() -> str:
+    return font_face_css(FONTS_DIR, FONT_SPECS)

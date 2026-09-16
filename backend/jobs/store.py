@@ -46,6 +46,23 @@ class Job:
         ]
         return cls(payload["job_id"], payload["source_pdf"], payload["page_count"], units)
 
+    def to_dict(self) -> dict:
+        return {
+            "job_id": self.job_id,
+            "source_pdf": self.source_pdf,
+            "page_count": self.page_count,
+            "units": [
+                {
+                    "unit_id": unit.unit_id,
+                    "label": unit.label,
+                    "page_start": unit.page_start,
+                    "page_end": unit.page_end,
+                    "status": unit.status.value,
+                }
+                for unit in self.units
+            ],
+        }
+
 
 def jobs_dir_for(root: Path, job_id: str) -> Path:
     """Validate the id, then build the path. Never join model-supplied text blindly."""
