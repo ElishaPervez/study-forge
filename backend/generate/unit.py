@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
+from html.parser import HTMLParser
 from pathlib import Path
 
 from backend.fonts.embed import inject_fonts
@@ -20,6 +21,33 @@ from backend.verify.self_check import CheckResult, run_self_check
 MAX_CALLS = 3
 RETRY_BACKOFF_BASE_SECONDS = 0.1
 RETRY_BACKOFF_MAX_SECONDS = 1.0
+V1_MOTION_ATTRIBUTES = {
+    "data-motion",
+    "data-motion-root",
+    "data-motion-item",
+    "data-motion-action",
+    "data-motion-controls",
+    "data-motion-status",
+    "data-motion-decorative",
+    "data-motion-mode",
+    "data-motion-state",
+    "data-motion-step-label",
+    "data-step",
+    "data-step-count",
+    "data-step-current",
+    "data-frame",
+    "data-static-frame",
+}
+V1_FORBIDDEN_TAGS = {"base", "embed", "object", "iframe"}
+V1_URL_ATTRIBUTES = {
+    "src",
+    "href",
+    "xlink:href",
+    "poster",
+    "srcset",
+    "action",
+    "formaction",
+}
 
 
 class UnitStatus(str, Enum):
@@ -47,6 +75,87 @@ class UnitResult:
     requested_refs: list[str] = field(default_factory=list)
     artifact_path: Path | None = None
     findings: list[str] = field(default_factory=list)
+
+
+class _V1OutputPolicyParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.findings: list[str] = []
+        self._html_seen = False
+        self._html_closed = False
+        self._inside_html = False
+
+    def _add(self, finding: str) -> None:
+        if finding not in self.findings:
+            self.findings.append(finding)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.casefold()
+        normalized = [(key.casefold(), value or "") for key, value in attrs]
+        attributes = dict(normalized)
+
+        if tag == "html":
+            if self._html_seen:
+                self._add("v1 output policy requires one complete <html> document")
+            else:
+                self._html_seen = True
+                self._inside_html = True
+        elif not self._inside_html:
+            self._add(f"v1 output policy forbids <{tag}> outside the complete <html> document")
+
+        if tag == "script":
+            self._add("v1 output policy forbids <script> tags")
+        if tag in V1_FORBIDDEN_TAGS:
+            self._add(f"v1 output policy forbids <{tag}> tags")
+
+        for key, value in normalized:
+            if key.startswith("on"):
+                self._add(f"v1 output policy forbids executable attribute {key}")
+            if key == "srcdoc":
+                self._add("v1 output policy forbids srcdoc attributes")
+            if key in V1_MOTION_ATTRIBUTES or key.startswith("data-motion-"):
+                self._add("v1 output policy forbids motion markup")
+            if key in V1_URL_ATTRIBUTES:
+                lowered = value.strip().casefold()
+                if lowered.startswith(("http://", "https://", "//")):
+                    self._add("v1 output policy forbids remote assets")
+                if lowered.startswith("data:") and not lowered.startswith("data:image/"):
+                    self._add("v1 output policy forbids non-image data URLs on tags")
+
+        if tag == "link" and attributes.get("href", "").strip().casefold().startswith(
+            ("http://", "https://", "//")
+        ):
+            self._add("v1 output policy forbids remote stylesheets")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.casefold()
+        if tag == "html":
+            if not self._html_seen or self._html_closed:
+                self._add("v1 output policy requires one complete <html> document")
+            else:
+                self._html_closed = True
+                self._inside_html = False
+        elif not self._inside_html:
+            self._add(f"v1 output policy forbids </{tag}> outside the complete <html> document")
+
+    def handle_data(self, data: str) -> None:
+        if data.strip() and not self._inside_html:
+            self._add("v1 output policy forbids text outside the complete <html> document")
+
+
+def _v1_output_policy_findings(html: str) -> list[str]:
+    parser = _V1OutputPolicyParser()
+    parser.feed(html)
+    parser.close()
+    if not parser._html_seen:
+        parser._add("v1 output policy requires one complete <html> document")
+    elif not parser._html_closed:
+        parser._add("v1 output policy requires a closing </html> tag")
+    return parser.findings
 
 
 def _tools(bundle: Bundle) -> list[dict]:
@@ -203,6 +312,7 @@ def generate_unit(
     out_dir: Path,
     max_calls: int = MAX_CALLS,
     checker: Callable[[Path, Path], CheckResult] = run_self_check,
+    status_callback: Callable[[UnitStatus], None] | None = None,
 ) -> UnitResult:
     budget = max(0, min(MAX_CALLS, max_calls))
     calls = 0
@@ -221,6 +331,7 @@ def generate_unit(
         {"role": "system", "content": bundle.system_prompt},
         {"role": "user", "content": content},
     ]
+    repair_used = False
 
     while calls < budget:
         calls += 1
@@ -259,17 +370,19 @@ def generate_unit(
             messages.extend(_resolve_tool_calls(reply.tool_calls, bundle, requested))
             continue
 
-        html = _strip_fences(reply.text or "")
-        if fonts_css:
-            html = inject_fonts(html, fonts_css)
+        html = inject_fonts(_strip_fences(reply.text or ""), fonts_css)
         _write_atomic(artifact_path, html)
         published = True
+        if status_callback is not None:
+            status_callback(UnitStatus.VERIFYING)
+        policy_findings = _v1_output_policy_findings(html)
         result = checker(artifact_path, bundle.skill_dir)
-        if result.ok:
+        findings = [*policy_findings, *result.findings]
+        if result.ok and not policy_findings:
             return UnitResult(UnitStatus.OK, calls, list(requested), artifact_path, [])
 
-        last_findings = list(result.findings)
-        if calls >= budget:
+        last_findings = findings or ["v1 output policy or checker rejected artifact"]
+        if repair_used or calls >= budget:
             return _failed_result(
                 UnitStatus.NEEDS_ATTENTION,
                 calls,
@@ -279,8 +392,11 @@ def generate_unit(
                 last_findings,
             )
 
+        repair_used = True
         messages.append({"role": "assistant", "content": reply.text or ""})
         messages.append({"role": "user", "content": _repair_prompt(last_findings)})
+        if status_callback is not None:
+            status_callback(UnitStatus.REPAIRING)
 
     return _failed_result(
         UnitStatus.NEEDS_ATTENTION,

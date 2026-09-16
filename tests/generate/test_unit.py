@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from backend.fonts.embed import inject_fonts
 from backend.generate.unit import UnitRequest, UnitStatus, generate_unit
 from backend.ingest.pdf import PageImage
 from backend.llm.client import LLMError, LLMReply, ToolCall
@@ -7,7 +8,11 @@ from backend.skill.bundle import load_bundle
 from backend.verify.self_check import run_self_check
 
 SKILL_DIR = Path("diagram-design")
-GOOD = (SKILL_DIR / "assets" / "template.html").read_text(encoding="utf-8")
+RAW_GOOD = (SKILL_DIR / "assets" / "template.html").read_text(encoding="utf-8")
+GOOD = inject_fonts(RAW_GOOD, "")
+MOTION = inject_fonts(
+    (SKILL_DIR / "assets" / "template-motion.html").read_text(encoding="utf-8"), ""
+)
 BROKEN = '<html><body><svg viewBox="0 0 100 100"></svg></body></html>'
 
 
@@ -33,7 +38,7 @@ def _request(tmp_path: Path, numbers=(1, 2)) -> UnitRequest:
 
 
 def test_single_call_unit_that_passes_stops_at_one_call(tmp_path: Path) -> None:
-    llm = ScriptedLLM([LLMReply(text=GOOD)])
+    llm = ScriptedLLM([LLMReply(text=RAW_GOOD)])
 
     result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
                            fonts_css="", out_dir=tmp_path / "out")
@@ -43,6 +48,7 @@ def test_single_call_unit_that_passes_stops_at_one_call(tmp_path: Path) -> None:
     written = result.artifact_path.read_text(encoding="utf-8")
     # read_text normalizes newlines, so autocrlf cannot make this flaky.
     assert written == GOOD.strip() + "\n"
+    assert "fonts.googleapis.com" not in written
     assert run_self_check(result.artifact_path, SKILL_DIR).ok is True
 
 
@@ -85,12 +91,13 @@ def test_broken_artifact_is_repaired_once(tmp_path: Path) -> None:
 
 
 def test_second_failure_marks_needs_attention_and_keeps_html(tmp_path: Path) -> None:
-    llm = ScriptedLLM([LLMReply(text=BROKEN), LLMReply(text=BROKEN), LLMReply(text=BROKEN)])
+    llm = ScriptedLLM([LLMReply(text=BROKEN), LLMReply(text=BROKEN), LLMReply(text=GOOD)])
 
     result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
                            fonts_css="", out_dir=tmp_path / "out")
 
-    assert result.calls == 3
+    assert result.calls == 2
+    assert len(llm.seen) == 2
     assert result.status is UnitStatus.NEEDS_ATTENTION
     assert result.findings
     assert result.artifact_path.is_file()
@@ -158,3 +165,59 @@ def test_font_css_is_injected_before_the_artifact_is_published(tmp_path: Path) -
     assert result.status is UnitStatus.OK
     written = result.artifact_path.read_text(encoding="utf-8")
     assert css in written
+
+
+def test_checker_passing_script_and_motion_candidate_is_repaired(tmp_path: Path) -> None:
+    candidate = tmp_path / "motion.html"
+    candidate.write_text(MOTION, encoding="utf-8")
+    assert run_self_check(candidate, SKILL_DIR).ok is True
+
+    llm = ScriptedLLM([LLMReply(text=MOTION), LLMReply(text=GOOD)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.calls == 2
+    assert result.status is UnitStatus.OK
+    repair_prompt = llm.seen[1][-1]["content"].lower()
+    assert "script" in repair_prompt
+    assert "motion" in repair_prompt
+
+
+def test_checker_passing_script_and_motion_candidate_gets_one_repair(tmp_path: Path) -> None:
+    llm = ScriptedLLM([LLMReply(text=MOTION), LLMReply(text=MOTION), LLMReply(text=GOOD)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.calls == 2
+    assert result.status is UnitStatus.NEEDS_ATTENTION
+    assert result.artifact_path.is_file()
+    assert "<script" in result.artifact_path.read_text(encoding="utf-8").lower()
+
+
+def test_commentary_outside_html_is_repaired(tmp_path: Path) -> None:
+    candidate = f"Here is the completed lesson:\n{GOOD}\nHope this helps."
+    llm = ScriptedLLM([LLMReply(text=candidate), LLMReply(text=GOOD)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.calls == 2
+    assert result.status is UnitStatus.OK
+    written = result.artifact_path.read_text(encoding="utf-8")
+    assert written == GOOD.strip() + "\n"
+    assert "Here is the completed lesson" not in written
+    assert "outside" in llm.seen[1][-1]["content"].lower()
+
+
+def test_status_callback_reports_verification_and_repair(tmp_path: Path) -> None:
+    events: list[UnitStatus] = []
+    llm = ScriptedLLM([LLMReply(text=BROKEN), LLMReply(text=GOOD)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out",
+                           status_callback=events.append)
+
+    assert result.status is UnitStatus.OK
+    assert events == [UnitStatus.VERIFYING, UnitStatus.REPAIRING, UnitStatus.VERIFYING]
