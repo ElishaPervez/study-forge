@@ -226,6 +226,63 @@ def test_checker_passing_executable_css_urls_are_repaired(tmp_path: Path) -> Non
     assert "executable" in repair_prompt
 
 
+def test_checker_passing_quoted_css_comment_marker_does_not_hide_remote_url(
+    tmp_path: Path,
+) -> None:
+    css = (
+        '.label::before{content:"/*";}'
+        '.hero{background-image:url("https://example.com/background.png");}'
+        '/*"*/'
+    )
+    candidate = GOOD.replace("<style>", f"<style>{css}", 1)
+    candidate_path = tmp_path / "quoted-comment-css.html"
+    candidate_path.write_text(candidate, encoding="utf-8")
+    assert run_self_check(candidate_path, SKILL_DIR).ok is True
+
+    llm = ScriptedLLM([LLMReply(text=candidate), LLMReply(text=GOOD)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.calls == 2
+    assert result.status is UnitStatus.OK
+    assert "remote" in llm.seen[1][-1]["content"].lower()
+
+
+def test_checker_passing_escaped_remote_css_url_is_repaired(tmp_path: Path) -> None:
+    css = r".hero{background-image:url(\68\74\74\70://example.com/background.png)}"
+    candidate = GOOD.replace("<style>", f"<style>{css}", 1)
+    candidate_path = tmp_path / "escaped-remote-css.html"
+    candidate_path.write_text(candidate, encoding="utf-8")
+    assert run_self_check(candidate_path, SKILL_DIR).ok is True
+
+    llm = ScriptedLLM([LLMReply(text=candidate), LLMReply(text=GOOD)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.calls == 2
+    assert result.status is UnitStatus.OK
+    assert "remote" in llm.seen[1][-1]["content"].lower()
+
+
+def test_checker_passing_escaped_executable_css_url_is_repaired(tmp_path: Path) -> None:
+    css = r".bad{background-image:url(\6a avascript:alert(1))}"
+    candidate = GOOD.replace("<style>", f"<style>{css}", 1)
+    candidate_path = tmp_path / "escaped-executable-css.html"
+    candidate_path.write_text(candidate, encoding="utf-8")
+    assert run_self_check(candidate_path, SKILL_DIR).ok is True
+
+    llm = ScriptedLLM([LLMReply(text=candidate), LLMReply(text=GOOD)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.calls == 2
+    assert result.status is UnitStatus.OK
+    assert "executable" in llm.seen[1][-1]["content"].lower()
+
+
 def test_executable_tag_urls_are_repaired_even_if_checker_approves(tmp_path: Path) -> None:
     candidate = GOOD.replace(
         "<body>",

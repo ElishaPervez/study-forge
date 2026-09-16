@@ -49,6 +49,9 @@ V1_URL_ATTRIBUTES = {
     "action",
     "formaction",
 }
+_CSS_ESCAPE_RE = re.compile(
+    r"""\\(?:(?P<hex>[0-9a-fA-F]{1,6})(?:[ \t]|\r\n|[\r\n\f])?|(?P<char>[^\r\n\f]))"""
+)
 _CSS_IMPORT_RE = re.compile(r"@import\b", re.IGNORECASE)
 _CSS_URL_RE = re.compile(
     r"""url\(\s*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)'|(?P<bare>[^)]*))\s*\)""",
@@ -66,6 +69,19 @@ _EXECUTABLE_URL_PREFIXES = (
     "data:application/ecmascript",
     "data:text/ecmascript",
 )
+
+
+def _decode_css_escapes(value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        hexadecimal = match.group("hex")
+        if hexadecimal is None:
+            return match.group("char") or ""
+        codepoint = int(hexadecimal, 16)
+        if codepoint == 0 or codepoint > 0x10FFFF:
+            return "\uFFFD"
+        return chr(codepoint)
+
+    return _CSS_ESCAPE_RE.sub(replace, value)
 
 
 def _url_policy_finding(value: str, *, css: bool) -> str | None:
@@ -91,10 +107,10 @@ def _url_policy_finding(value: str, *, css: bool) -> str | None:
 
 def _css_policy_findings(css: str) -> list[str]:
     findings: list[str] = []
-    css_without_comments = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
-    if _CSS_IMPORT_RE.search(css_without_comments):
+    decoded_css = _decode_css_escapes(css)
+    if _CSS_IMPORT_RE.search(decoded_css):
         findings.append("v1 output policy forbids CSS @import rules")
-    for match in _CSS_URL_RE.finditer(css_without_comments):
+    for match in _CSS_URL_RE.finditer(decoded_css):
         value = next(
             group for group in match.groups() if group is not None
         )
