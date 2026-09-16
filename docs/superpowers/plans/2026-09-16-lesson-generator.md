@@ -1221,7 +1221,9 @@ def test_single_call_unit_that_passes_stops_at_one_call(tmp_path: Path) -> None:
 
     assert result.status is UnitStatus.OK
     assert result.calls == 1
-    assert result.artifact_path.read_text(encoding="utf-8") == GOOD.strip() + "\n" or result.artifact_path.is_file()
+    written = result.artifact_path.read_text(encoding="utf-8")
+    # read_text normalizes newlines, so autocrlf cannot make this flaky.
+    assert written == GOOD.strip() + "\n"
     assert run_self_check(result.artifact_path, SKILL_DIR).ok is True
 
 
