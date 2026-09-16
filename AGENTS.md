@@ -5,5 +5,6 @@
 - **Output contract:** the downloadable HTML file and the in-app download view are the same artifact — one render path, and the in-app view must match the file exactly. Artifacts are self-contained: no CDN, no network needed to open.
 - **Diagram-design is content, not styling:** it constrains generated HTML and is the single biggest quality lever; prompts and design-system sources are versioned first-class artifacts.
 - Never commit student material, extracted text, or generated artifacts.
-- **Undecided:** stack, model provider, OCR/parser, Diagram-design format, multi-unit bundling, accounts — ask rather than assume. When a toolchain exists, record exact install/build/test/lint commands here using the project's existing package manager (never add a second).
+- **Undecided:** stack, model provider, OCR/parser, Diagram-design format, multi-unit bundling, accounts — ask rather than assume.
+- **Toolchain (Windows only):** install `uv sync`; Python tests `uv run pytest`; lint `uv run ruff check .`; frontend install `npm install`, test `npm test`, build `npm run build`. Package managers: `uv` for Python, `npm` for Node — never a second for either.
 - **Git:** don't push/commit/rebase or alter git config unless explicitly asked. Commits: imperative mood, <72-char subject, explain why.
