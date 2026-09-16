@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import io
+import os
+import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,38 @@ class PageImage:
     path: Path
     width: int
     height: int
+
+
+def _read_cached_page(number: int, target: Path, max_edge: int) -> PageImage | None:
+    try:
+        with Image.open(target) as existing:
+            if existing.format != "JPEG" or max(existing.size) > max_edge:
+                return None
+            existing.load()
+            width, height = existing.size
+    except (Image.DecompressionBombError, OSError, SyntaxError, ValueError):
+        return None
+    return PageImage(number, target, width, height)
+
+
+def _write_jpeg(image: Image.Image, target: Path, quality: int) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=target.parent,
+            prefix=f".{target.stem}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+        image.save(temporary_path, format="JPEG", quality=quality, optimize=True)
+        os.replace(temporary_path, target)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def page_count(pdf_path: Path) -> int:
@@ -45,14 +78,13 @@ def rasterize(
         for number in page_numbers:
             target = out_dir / f"{number:04d}.jpg"
             if target.is_file():
-                with Image.open(target) as existing:
-                    images.append(PageImage(number, target, *existing.size))
-                continue
+                cached = _read_cached_page(number, target, max_edge)
+                if cached is not None:
+                    images.append(cached)
+                    continue
             pixmap = doc[number - 1].get_pixmap(matrix=pymupdf.Matrix(ZOOM, ZOOM))
             image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
             image.thumbnail((max_edge, max_edge), Image.LANCZOS)
-            buffer = io.BytesIO()
-            image.save(buffer, format="JPEG", quality=quality, optimize=True)
-            target.write_bytes(buffer.getvalue())
+            _write_jpeg(image, target, quality)
             images.append(PageImage(number, target, *image.size))
     return images
