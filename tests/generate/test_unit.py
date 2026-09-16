@@ -5,7 +5,7 @@ from backend.generate.unit import UnitRequest, UnitStatus, generate_unit
 from backend.ingest.pdf import PageImage
 from backend.llm.client import LLMError, LLMReply, ToolCall
 from backend.skill.bundle import load_bundle
-from backend.verify.self_check import run_self_check
+from backend.verify.self_check import CheckResult, run_self_check
 
 SKILL_DIR = Path("diagram-design")
 RAW_GOOD = (SKILL_DIR / "assets" / "template.html").read_text(encoding="utf-8")
@@ -165,6 +165,89 @@ def test_font_css_is_injected_before_the_artifact_is_published(tmp_path: Path) -
     assert result.status is UnitStatus.OK
     written = result.artifact_path.read_text(encoding="utf-8")
     assert css in written
+
+
+def test_embedded_css_data_urls_are_allowed(tmp_path: Path) -> None:
+    css = (
+        "@font-face{font-family:'Instrument Serif';"
+        "src:url(data:font/woff2;base64,abc)}"
+        ".icon{background-image:url(data:image/png;base64,abc)}"
+    )
+    llm = ScriptedLLM([LLMReply(text=GOOD)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css=css, out_dir=tmp_path / "out")
+
+    assert result.status is UnitStatus.OK
+    assert result.calls == 1
+    written = result.artifact_path.read_text(encoding="utf-8")
+    assert "data:font/woff2;base64,abc" in written
+    assert "data:image/png;base64,abc" in written
+
+
+def test_checker_passing_remote_css_is_repaired(tmp_path: Path) -> None:
+    css = (
+        "@import url('https://example.com/theme.css');"
+        ".hero{background-image:url('https://example.com/background.png')}"
+    )
+    candidate = GOOD.replace("<style>", f"<style>{css}", 1)
+    candidate_path = tmp_path / "remote-css.html"
+    candidate_path.write_text(candidate, encoding="utf-8")
+    assert run_self_check(candidate_path, SKILL_DIR).ok is True
+
+    llm = ScriptedLLM([LLMReply(text=candidate), LLMReply(text=GOOD)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.calls == 2
+    assert result.status is UnitStatus.OK
+    assert "remote" in llm.seen[1][-1]["content"].lower()
+
+
+def test_checker_passing_executable_css_urls_are_repaired(tmp_path: Path) -> None:
+    css = (
+        ".bad{background-image:url(javascript:alert(1))}"
+        ".also-bad{background-image:url('vbscript:msgbox(1)')}"
+    )
+    candidate = GOOD.replace("<style>", f"<style>{css}", 1)
+    candidate_path = tmp_path / "executable-css.html"
+    candidate_path.write_text(candidate, encoding="utf-8")
+    assert run_self_check(candidate_path, SKILL_DIR).ok is True
+
+    llm = ScriptedLLM([LLMReply(text=candidate), LLMReply(text=GOOD)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.calls == 2
+    assert result.status is UnitStatus.OK
+    repair_prompt = llm.seen[1][-1]["content"].lower()
+    assert "executable" in repair_prompt
+
+
+def test_executable_tag_urls_are_repaired_even_if_checker_approves(tmp_path: Path) -> None:
+    candidate = GOOD.replace(
+        "<body>",
+        '<body><a href="javascript:alert(1)">bad</a>'
+        '<a href="vbscript:msgbox(1)">also bad</a>',
+        1,
+    )
+    llm = ScriptedLLM([LLMReply(text=candidate), LLMReply(text=GOOD)])
+
+    result = generate_unit(
+        _request(tmp_path),
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        out_dir=tmp_path / "out",
+        checker=lambda path, skill_dir: CheckResult(True, []),
+    )
+
+    assert result.calls == 2
+    assert result.status is UnitStatus.OK
+    repair_prompt = llm.seen[1][-1]["content"].lower()
+    assert "executable" in repair_prompt
 
 
 def test_checker_passing_script_and_motion_candidate_is_repaired(tmp_path: Path) -> None:

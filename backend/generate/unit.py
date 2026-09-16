@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import time
 from collections.abc import Callable, Sequence
@@ -48,6 +49,59 @@ V1_URL_ATTRIBUTES = {
     "action",
     "formaction",
 }
+_CSS_IMPORT_RE = re.compile(r"@import\b", re.IGNORECASE)
+_CSS_URL_RE = re.compile(
+    r"""url\(\s*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)'|(?P<bare>[^)]*))\s*\)""",
+    re.IGNORECASE | re.DOTALL,
+)
+_EXECUTABLE_URL_PREFIXES = (
+    "javascript:",
+    "vbscript:",
+    "livescript:",
+    "mocha:",
+    "data:text/html",
+    "data:application/xhtml+xml",
+    "data:application/javascript",
+    "data:text/javascript",
+    "data:application/ecmascript",
+    "data:text/ecmascript",
+)
+
+
+def _url_policy_finding(value: str, *, css: bool) -> str | None:
+    lowered = value.strip().casefold()
+    if lowered.startswith(_EXECUTABLE_URL_PREFIXES):
+        return "v1 output policy forbids executable URL schemes"
+    if lowered.startswith(("http://", "https://", "//")):
+        if css:
+            return "v1 output policy forbids remote CSS URLs"
+        return "v1 output policy forbids remote assets"
+    if lowered.startswith("data:"):
+        if css and lowered.startswith("data:image/"):
+            return None
+        if css and lowered.startswith("data:font/woff2;base64,"):
+            return None
+        if not css and lowered.startswith("data:image/"):
+            return None
+        if css:
+            return "v1 output policy forbids non-image or embedded-font CSS data URLs"
+        return "v1 output policy forbids non-image data URLs on tags"
+    return None
+
+
+def _css_policy_findings(css: str) -> list[str]:
+    findings: list[str] = []
+    css_without_comments = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    if _CSS_IMPORT_RE.search(css_without_comments):
+        findings.append("v1 output policy forbids CSS @import rules")
+    for match in _CSS_URL_RE.finditer(css_without_comments):
+        value = next(
+            group for group in match.groups() if group is not None
+        )
+        finding = _url_policy_finding(value, css=True)
+        if finding and finding not in findings:
+            findings.append(finding)
+    return findings
 
 
 class UnitStatus(str, Enum):
@@ -84,6 +138,8 @@ class _V1OutputPolicyParser(HTMLParser):
         self._html_seen = False
         self._html_closed = False
         self._inside_html = False
+        self._style_depth = 0
+        self._css_chunks: list[str] = []
 
     def _add(self, finding: str) -> None:
         if finding not in self.findings:
@@ -116,16 +172,18 @@ class _V1OutputPolicyParser(HTMLParser):
             if key in V1_MOTION_ATTRIBUTES or key.startswith("data-motion-"):
                 self._add("v1 output policy forbids motion markup")
             if key in V1_URL_ATTRIBUTES:
-                lowered = value.strip().casefold()
-                if lowered.startswith(("http://", "https://", "//")):
-                    self._add("v1 output policy forbids remote assets")
-                if lowered.startswith("data:") and not lowered.startswith("data:image/"):
-                    self._add("v1 output policy forbids non-image data URLs on tags")
+                finding = _url_policy_finding(value, css=False)
+                if finding:
+                    self._add(finding)
+            if key == "style":
+                self._css_chunks.append(value)
 
         if tag == "link" and attributes.get("href", "").strip().casefold().startswith(
             ("http://", "https://", "//")
         ):
             self._add("v1 output policy forbids remote stylesheets")
+        if tag == "style":
+            self._style_depth += 1
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.handle_starttag(tag, attrs)
@@ -141,8 +199,12 @@ class _V1OutputPolicyParser(HTMLParser):
                 self._inside_html = False
         elif not self._inside_html:
             self._add(f"v1 output policy forbids </{tag}> outside the complete <html> document")
+        if tag == "style" and self._style_depth:
+            self._style_depth -= 1
 
     def handle_data(self, data: str) -> None:
+        if self._style_depth:
+            self._css_chunks.append(data)
         if data.strip() and not self._inside_html:
             self._add("v1 output policy forbids text outside the complete <html> document")
 
@@ -155,6 +217,8 @@ def _v1_output_policy_findings(html: str) -> list[str]:
         parser._add("v1 output policy requires one complete <html> document")
     elif not parser._html_closed:
         parser._add("v1 output policy requires a closing </html> tag")
+    for finding in _css_policy_findings("".join(parser._css_chunks)):
+        parser._add(finding)
     return parser.findings
 
 
