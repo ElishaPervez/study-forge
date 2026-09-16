@@ -16,6 +16,7 @@ dev = ["pytest", "pytest-asyncio", "ruff", "respx"]
 
 [tool.ruff]
 line-length = 100
+extend-exclude = ["diagram-design/scripts"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

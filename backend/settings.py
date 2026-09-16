@@ -36,9 +36,9 @@ def load_settings(env_file: Path | None = None) -> Settings:
         raise ValueError("OPENROUTER_API_KEY is missing; put it in .env")
     return Settings(
         openrouter_api_key=api_key,
-        model=env.get("MODEL", DEFAULT_MODEL),
-        reasoning_effort=env.get("REASONING_EFFORT", "low"),
-        max_output_tokens=int(env.get("MAX_OUTPUT_TOKENS", "32768")),
+        model=DEFAULT_MODEL,
+        reasoning_effort="low",
+        max_output_tokens=32768,
         skill_dir=Path(env.get("SKILL_DIR", "diagram-design")),
         jobs_dir=Path(env.get("JOBS_DIR", "jobs")),
     )
