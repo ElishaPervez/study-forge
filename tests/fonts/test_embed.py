@@ -38,3 +38,11 @@ def test_injection_is_idempotent() -> None:
     once = inject_fonts(html, css)
 
     assert inject_fonts(once, css) == once
+
+
+def test_template_injection_removes_remote_google_fonts_stylesheet() -> None:
+    html = Path("diagram-design/assets/template.html").read_text(encoding="utf-8")
+
+    out = inject_fonts(html, font_face_css(FONTS, SPECS))
+
+    assert "fonts.googleapis.com" not in out

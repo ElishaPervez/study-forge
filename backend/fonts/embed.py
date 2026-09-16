@@ -8,6 +8,11 @@ from pathlib import Path
 
 STYLE_OPEN = "<style>"
 STYLE_CLOSE = "</style>"
+GOOGLE_FONTS_STYLESHEET = re.compile(
+    r"<link\b(?=[^>]*\bhref\s*=\s*[\"']https?://fonts\.googleapis\.com/[^\"']*[\"'])"
+    r"(?=[^>]*\brel\s*=\s*[\"']stylesheet[\"'])[^>]*>",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +43,7 @@ def inject_fonts(html: str, css: str) -> str:
     It must be CSS, never a tag attribute: self_check.py rejects any
     non-`data:image/` data URL on a tag and never inspects CSS.
     """
+    html = GOOGLE_FONTS_STYLESHEET.sub("", html)
     if "@font-face" in html:
         return html
     if STYLE_OPEN in html and STYLE_CLOSE in html:
