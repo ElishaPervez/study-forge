@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.app import create_app
+from backend.generate.unit import UnitResult, UnitStatus
 from backend.settings import Settings
 
 
@@ -66,6 +67,9 @@ def test_generate_writes_artifact_that_both_routes_serve_identically(client: Tes
 
     assert generated.status_code == 200
     assert generated.json()["status"] == "ok"
+    assert generated.json()["artifact_url"] == (
+        f"/api/jobs/{job['job_id']}/units/{unit_id}/artifact.html"
+    )
 
     inline = client.get(f"/api/jobs/{job['job_id']}/units/{unit_id}/artifact.html")
     download = client.get(
@@ -76,6 +80,34 @@ def test_generate_writes_artifact_that_both_routes_serve_identically(client: Tes
     assert inline.content == download.content
     assert "attachment" in download.headers["content-disposition"]
     assert inline.headers["content-disposition"].startswith("inline")
+
+
+@pytest.mark.parametrize("status", [UnitStatus.FAILED, UnitStatus.NEEDS_ATTENTION])
+def test_generation_without_published_artifact_returns_null_artifact_url(
+    client: TestClient, monkeypatch, status: UnitStatus
+) -> None:
+    job = client.post(
+        "/api/jobs",
+        json={"pdf": str(client.app.state.source_pdf), "ranges": [["Unit A", 1, 2]]},
+    ).json()
+    unit_id = job["units"][0]["unit_id"]
+
+    def generate_without_artifact(*args, **kwargs) -> UnitResult:
+        return UnitResult(
+            status=status,
+            calls=1,
+            artifact_path=None,
+            findings=["no artifact was published"],
+        )
+
+    monkeypatch.setattr("backend.api.app.generate_unit", generate_without_artifact)
+
+    response = client.post(f"/api/jobs/{job['job_id']}/units/{unit_id}/generate")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == status.value
+    assert response.json()["artifact_url"] is None
+    assert client.get(f"/api/jobs/{job['job_id']}/units/{unit_id}/artifact.html").status_code == 404
 
 
 def test_generate_is_refused_for_a_status_that_is_not_pending(client: TestClient) -> None:

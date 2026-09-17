@@ -93,12 +93,17 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
             ),
         )
         set_unit_status(settings.jobs_dir, job.job_id, unit.unit_id, result.status)
+        artifact_url = (
+            f"/api/jobs/{job.job_id}/units/{unit.unit_id}/artifact.html"
+            if result.artifact_path is not None
+            else None
+        )
         return {
             "status": result.status.value,
             "calls": result.calls,
             "requested_refs": result.requested_refs,
             "findings": result.findings,
-            "artifact_url": f"/api/jobs/{job.job_id}/units/{unit.unit_id}/artifact.html",
+            "artifact_url": artifact_url,
         }
 
     @app.get("/api/jobs/{job_id}/units/{unit_id}/artifact.html")

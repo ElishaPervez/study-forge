@@ -38,6 +38,10 @@ function statusTone(status: string): string {
   return "working";
 }
 
+export function hasPublishedArtifact(result: GenerateResult | undefined): boolean {
+  return typeof result?.artifact_url === "string" && result.artifact_url.length > 0;
+}
+
 export function UnitCard({
   unit,
   jobId,
@@ -50,7 +54,7 @@ export function UnitCard({
   const status = unit.status;
   const statusLabel = statusLabels[status] ?? status;
   const tone = statusTone(status);
-  const hasArtifact = Boolean(result?.artifact_url) || status === "ok" || status === "needs-attention";
+  const hasArtifact = hasPublishedArtifact(result);
   const canRetry = status === "needs-attention" || status === "failed";
   const references = result?.requested_refs ?? [];
   const findings = result?.findings ?? [];

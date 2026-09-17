@@ -27,7 +27,7 @@ export interface GenerateResult {
   calls: number;
   requested_refs: string[];
   findings: string[];
-  artifact_url: string;
+  artifact_url: string | null;
 }
 
 export function artifactUrl(
