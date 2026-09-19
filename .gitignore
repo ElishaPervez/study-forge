@@ -1,4 +1,5 @@
 .worktrees/
+.freebuff/
 /docs/
 .env
 .venv/

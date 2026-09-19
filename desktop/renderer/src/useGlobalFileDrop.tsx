@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { inAppDragInProgress, trackInAppDrags } from "./inAppDrag";
+
 export interface UseGlobalFileDropOptions {
   disabled: boolean;
   onFilesDropped: (files: File[]) => void;
@@ -17,6 +19,15 @@ export function beginGlobalDropSession(): GlobalDropSession {
 export function dataTransferHasFiles(dataTransfer: DataTransfer | null): boolean {
   if (dataTransfer === null) return false;
   return Array.from(dataTransfer.types).includes("Files");
+}
+
+/**
+ * A drag only counts as a source drop when it started outside this window:
+ * dragging in-app content (a page render, an uploaded image) reports "Files"
+ * too, but it carries no file path, so intake could only reject it.
+ */
+export function sourceDropHasFiles(dataTransfer: DataTransfer | null, inAppDrag: boolean): boolean {
+  return !inAppDrag && dataTransferHasFiles(dataTransfer);
 }
 
 export function dropSessionAfterEnter(
@@ -82,21 +93,23 @@ export function useGlobalFileDrop({ disabled, onFilesDropped }: UseGlobalFileDro
     const handleDragEnter = (event: DragEvent) => {
       sessionRef.current = dropSessionAfterEnter(
         sessionRef.current,
-        dataTransferHasFiles(event.dataTransfer),
+        sourceDropHasFiles(event.dataTransfer, inAppDragInProgress()),
       );
       syncOverlay();
     };
 
     const handleDragOver = (event: DragEvent) => {
-      if (dataTransferHasFiles(event.dataTransfer)) {
-        // Allow the drop anywhere in the window instead of navigating to the file.
-        event.preventDefault();
-        if (event.dataTransfer !== null) {
-          event.dataTransfer.dropEffect = "copy";
-        }
-        sessionRef.current = dropSessionAfterOver(sessionRef.current, true);
-        syncOverlay();
+      if (!dataTransferHasFiles(event.dataTransfer)) return;
+      // Allow the drop anywhere in the window instead of navigating to the file.
+      // In-app drags are refused the same way: they must not navigate either.
+      event.preventDefault();
+      const sourceDrop = !inAppDragInProgress();
+      if (event.dataTransfer !== null) {
+        event.dataTransfer.dropEffect = sourceDrop ? "copy" : "none";
       }
+      if (!sourceDrop) return;
+      sessionRef.current = dropSessionAfterOver(sessionRef.current, true);
+      syncOverlay();
     };
 
     const handleDragLeave = (event: DragEvent) => {
@@ -114,18 +127,22 @@ export function useGlobalFileDrop({ disabled, onFilesDropped }: UseGlobalFileDro
         resetSession();
         return;
       }
+      // Never let a dropped in-app image navigate the window to its preview URL.
       event.preventDefault();
       const files = event.dataTransfer === null ? [] : Array.from(event.dataTransfer.files);
+      const sourceDrop = !inAppDragInProgress();
       resetSession();
-      if (disabledRef.current) return;
+      if (disabledRef.current || !sourceDrop) return;
       onFilesDroppedRef.current(files);
     };
 
+    const stopTrackingInAppDrags = trackInAppDrags();
     window.addEventListener("dragenter", handleDragEnter);
     window.addEventListener("dragover", handleDragOver);
     window.addEventListener("dragleave", handleDragLeave);
     window.addEventListener("drop", handleDrop);
     return () => {
+      stopTrackingInAppDrags();
       window.removeEventListener("dragenter", handleDragEnter);
       window.removeEventListener("dragover", handleDragOver);
       window.removeEventListener("dragleave", handleDragLeave);

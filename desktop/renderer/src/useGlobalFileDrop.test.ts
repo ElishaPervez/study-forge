@@ -7,6 +7,7 @@ import {
   dropSessionAfterLeave,
   dropSessionAfterOver,
   globalDropOverlayVisible,
+  sourceDropHasFiles,
 } from "./useGlobalFileDrop";
 
 describe("global file drop session", () => {
@@ -75,5 +76,14 @@ describe("global file drop session", () => {
     session = dropSessionAfterLeave(session);
     expect(session.depth).toBe(0);
     expect(globalDropOverlayVisible(session)).toBe(false);
+  });
+
+  it("counts only drags from outside the window as source drops", () => {
+    const filesDrag = { types: ["Files"] } as unknown as DataTransfer;
+    const textDrag = { types: ["text/plain"] } as unknown as DataTransfer;
+    expect(sourceDropHasFiles(filesDrag, false)).toBe(true);
+    expect(sourceDropHasFiles(filesDrag, true)).toBe(false);
+    expect(sourceDropHasFiles(textDrag, false)).toBe(false);
+    expect(sourceDropHasFiles(null, false)).toBe(false);
   });
 });

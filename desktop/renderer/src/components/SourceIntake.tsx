@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 
 import type { SourceKind, SourceView } from "../api";
+import { inAppDragInProgress } from "../inAppDrag";
 import {
   ImageGroupEditor,
   moveImage,
@@ -180,13 +181,18 @@ export const SourceIntake = memo(function SourceIntake({
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
-    if (unavailable || !window.lessonGen) return;
+    // Dragging in-app content (a page render, an uploaded image) onto this card
+    // is not a source file drop: the payload carries no path.
+    if (inAppDragInProgress() || unavailable || !window.lessonGen) return;
     const paths = Array.from(event.dataTransfer.files).map((file) => window.lessonGen?.pathForFile(file) ?? "");
     acceptPaths(paths.filter((path) => path.length > 0));
   };
 
   const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
+    if (inAppDragInProgress() && event.dataTransfer !== null) {
+      event.dataTransfer.dropEffect = "none";
+    }
   };
 
   const handleInputChange = (event: ChangeEvent<HTMLInputElement>) => {
