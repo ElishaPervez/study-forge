@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   RevisionPopup,
   constrainRevisionPopupSize,
+  isOutsideRevisionPopup,
   isRevisionInstructionValid,
   positionRevisionPopup,
   resizeRevisionBounds,
@@ -55,6 +56,17 @@ describe("RevisionPopup", () => {
       right: 360,
       bottom: 220,
     });
+  });
+
+  it("retires the popup on an outside click but keeps its own controls", () => {
+    const inside = { tag: "textarea" } as unknown as Node;
+    const outside = { tag: "rail" } as unknown as Node;
+    const popup = { contains: (node: Node) => node === inside } as unknown as HTMLElement;
+
+    expect(isOutsideRevisionPopup(popup, outside)).toBe(true);
+    expect(isOutsideRevisionPopup(popup, inside)).toBe(false);
+    expect(isOutsideRevisionPopup(popup, null)).toBe(false);
+    expect(isOutsideRevisionPopup(null, outside)).toBe(false);
   });
 
   it("requires custom text for Update guide but not for Clarify this", () => {

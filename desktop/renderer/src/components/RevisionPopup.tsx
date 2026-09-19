@@ -82,6 +82,15 @@ export function isRevisionInstructionValid(instruction: string): boolean {
   return instruction.trim().length > 0;
 }
 
+/**
+ * The popup only exists for the passage that is selected right now, so a click
+ * anywhere else retires it instead of leaving it stranded over the guide.
+ */
+export function isOutsideRevisionPopup(popup: HTMLElement | null, target: Node | null): boolean {
+  if (popup === null || target === null) return false;
+  return !popup.contains(target);
+}
+
 export function positionRevisionPopup(
   anchorRect: RevisionRect,
   viewerBounds: RevisionBounds,
@@ -218,6 +227,17 @@ export function RevisionPopup({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  useEffect(() => {
+    // Clicks inside the guide frame never reach this document; the frame's own
+    // selection handling closes the popup from there.
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!isOutsideRevisionPopup(popupRef.current, event.target as Node | null)) return;
+      onClose();
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [onClose]);
 
   const update = () => {

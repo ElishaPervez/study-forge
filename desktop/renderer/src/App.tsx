@@ -820,7 +820,11 @@ export function App() {
     setSetupError(null);
   }, []);
 
-  const handleGuideSelection = useCallback((selection: GuideFrameSelection) => {
+  const handleGuideSelection = useCallback((selection: GuideFrameSelection | null) => {
+    if (selection === null) {
+      setRevisionSelection(null);
+      return;
+    }
     if (workState !== null) return;
     setSetupError(null);
     setRevisionSelection(selection);

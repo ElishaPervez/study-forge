@@ -12,7 +12,7 @@ export interface GuideFrameSelection {
 export interface GuideCardProps {
   guide: GuideView;
   baseUrl: string;
-  onSelection?: (selection: GuideFrameSelection) => void;
+  onSelection?: (selection: GuideFrameSelection | null) => void;
   revisionPopup?: ReactNode;
   revisionBusy?: boolean;
   reselectText?: string | null;
@@ -201,10 +201,16 @@ export const GuideCard = memo(function GuideCard({
 
       if (reselectText !== null) selectNearestText(frameDocument, reselectText);
 
+      // The revision popup is anchored to the passage that is selected right
+      // now, so anything that invalidates that passage - a fresh click, a
+      // collapsed selection, or scrolling the guide - retires the popup too.
+      const clearSelection = () => onSelection(null);
+
       const handleSelection = () => {
         if (revisionBusy) return;
         const selection = frameDocument?.getSelection();
         if (selection === null || selection === undefined || selection.rangeCount === 0 || selection.isCollapsed) {
+          clearSelection();
           return;
         }
         const selectedText = selection.toString().replace(/\s+/g, " ").trim();
@@ -230,10 +236,14 @@ export const GuideCard = memo(function GuideCard({
       frameDocument.addEventListener("mouseup", handleSelection);
       frameDocument.addEventListener("keyup", handleSelection);
       frameDocument.addEventListener("selectionchange", handleSelection);
+      // Scroll events do not bubble, so the frame document captures them for
+      // every scroller inside the guide.
+      frameDocument.addEventListener("scroll", clearSelection, true);
       detachDocument = () => {
         frameDocument?.removeEventListener("mouseup", handleSelection);
         frameDocument?.removeEventListener("keyup", handleSelection);
         frameDocument?.removeEventListener("selectionchange", handleSelection);
+        frameDocument?.removeEventListener("scroll", clearSelection, true);
       };
     };
 
