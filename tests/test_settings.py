@@ -16,7 +16,7 @@ def test_load_settings_reads_key_and_pins_model(tmp_path: Path) -> None:
 
     assert settings.openrouter_api_key == "sk-test-123"
     assert settings.model == "meta/muse-spark-1.3-contributor"
-    assert settings.reasoning_effort == "max"
+    assert settings.reasoning_effort == "xhigh"
     assert settings.max_output_tokens == 200000
 
 
@@ -33,7 +33,7 @@ def test_load_settings_ignores_model_and_parameter_overrides(tmp_path: Path) -> 
     settings = load_settings(env_file=env)
 
     assert settings.model == "meta/muse-spark-1.3-contributor"
-    assert settings.reasoning_effort == "max"
+    assert settings.reasoning_effort == "xhigh"
     assert settings.max_output_tokens == 200000
 
 

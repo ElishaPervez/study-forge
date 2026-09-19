@@ -4,14 +4,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_MODEL = "meta/muse-spark-1.3-contributor"
-# This provider exposes max/xhigh/high/medium/low/minimal (default: medium) and
-# marks reasoning mandatory, so "none" is rejected outright.
-DEFAULT_REASONING_EFFORT = "max"
+# Muse's provider advertises max/xhigh/high/medium/low/minimal in OpenRouter's
+# model metadata (default: medium) and marks reasoning mandatory. That metadata
+# is wrong about "max": the provider returns 400 for it in both the
+# reasoning_effort shorthand and the reasoning.effort object form. "xhigh" is
+# accepted and is documented to allocate the same ~95% of max_tokens as "max",
+# making it the highest effort this provider will actually accept.
+DEFAULT_REASONING_EFFORT = "xhigh"
 # Reasoning and visible output share this budget, so it must cover both. The
-# model's own ceiling is 943,718. "max" effort allocates roughly 95% of this
-# budget to reasoning, which is more headroom-hungry than the previous model at
-# "high": there, 46,493 reasoning tokens on a 21-image source truncated a
-# document mid-diagram at a 65,536 cap. A cap is a ceiling, not a charge.
+# model's own ceiling is 943,718. The top accepted effort spends roughly 95% of
+# it on reasoning, which is more headroom-hungry than the previous model: there,
+# 46,493 reasoning tokens on a 21-image source truncated a document mid-diagram
+# at a 65,536 cap. A cap is a ceiling, not a charge.
 DEFAULT_MAX_OUTPUT_TOKENS = 200000
 
 

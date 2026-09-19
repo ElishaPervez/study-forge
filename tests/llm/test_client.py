@@ -13,7 +13,7 @@ def _client(handler, *, provider_only=None) -> OpenRouterLLM:
     return OpenRouterLLM(
         api_key="sk-test",
         model="meta/muse-spark-1.3-contributor",
-        reasoning_effort="max",
+        reasoning_effort="xhigh",
         max_output_tokens=200000,
         provider_only=provider_only,
         transport=httpx.MockTransport(handler),
@@ -37,7 +37,7 @@ def test_request_pins_model_params_and_carries_no_remote_url() -> None:
 
     assert captured["model"] == "meta/muse-spark-1.3-contributor"
     assert captured["max_tokens"] == 200000
-    assert captured["reasoning_effort"] == "max"
+    assert captured["reasoning_effort"] == "xhigh"
     assert captured["provider"] == {
         "only": ["meta"],
         "allow_fallbacks": False,
