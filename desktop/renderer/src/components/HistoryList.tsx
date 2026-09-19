@@ -40,6 +40,15 @@ export function resolveSubmittedGuideName(previousName: string, submittedName: s
   return nextName.length > 0 ? nextName : previousName;
 }
 
+/**
+ * A plain left click on a ready guide opens it, so the card itself is the
+ * control. Failed guides stay non-committal - their recovery actions live in
+ * the context menu - and a busy rail opens nothing at all.
+ */
+export function historyItemOpensGuide(status: string, disabled: boolean, editing: boolean): boolean {
+  return !disabled && !editing && status === "ok";
+}
+
 function selectionLabel(guide: GuideSummary): string {
   if (guide.source === null) return "Source unavailable";
   if (guide.selection.mode === "images") {
@@ -149,11 +158,22 @@ export const HistoryList = memo(function HistoryList({
     openMenu(guide, { x: event.clientX, y: event.clientY }, event.currentTarget);
   };
 
+  const handleItemClick = (guide: GuideSummary, canOpen: boolean) => {
+    if (!canOpen) return;
+    void onOpen(guide);
+  };
+
   const handleItemKeyDown = (
     event: KeyboardEvent<HTMLLIElement>,
     guide: GuideSummary,
     canOpenMenu: boolean,
+    canOpen: boolean,
   ) => {
+    if (canOpen && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      void onOpen(guide);
+      return;
+    }
     if (!canOpenMenu) return;
     if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
     event.preventDefault();
@@ -165,8 +185,7 @@ export const HistoryList = memo(function HistoryList({
     const opened = menu;
     closeMenu();
     if (opened === null) return;
-    if (action === "open") void onOpen(opened.guide);
-    else if (action === "rename") beginRename(opened.guide);
+    if (action === "rename") beginRename(opened.guide);
     else if (action === "delete") void onDelete(opened.guide.guide_id);
     else void onRetry(opened.guide.guide_id);
   };
@@ -203,17 +222,19 @@ export const HistoryList = memo(function HistoryList({
             const menuEntries = editing || disabled ? [] : historyMenuEntries(guide.status);
             const canOpenMenu = menuEntries.length > 0;
             const menuOpen = menu?.guide.guide_id === guide.guide_id;
+            const canOpen = historyItemOpensGuide(guide.status, disabled, editing);
             return (
               <li
-                className={`history-item${activeGuideId === guide.guide_id ? " is-active" : ""}${menuOpen ? " is-menu-open" : ""}`}
+                className={`history-item${canOpen ? " is-openable" : ""}${activeGuideId === guide.guide_id ? " is-active" : ""}${menuOpen ? " is-menu-open" : ""}`}
                 key={guide.guide_id}
                 data-guide-id={guide.guide_id}
                 tabIndex={canOpenMenu ? 0 : undefined}
                 aria-haspopup={canOpenMenu ? "menu" : undefined}
                 aria-expanded={canOpenMenu ? menuOpen : undefined}
                 aria-keyshortcuts={canOpenMenu ? "Shift+F10" : undefined}
+                onClick={() => handleItemClick(guide, canOpen)}
                 onContextMenu={(event) => handleItemContextMenu(event, guide, canOpenMenu)}
-                onKeyDown={(event) => handleItemKeyDown(event, guide, canOpenMenu)}
+                onKeyDown={(event) => handleItemKeyDown(event, guide, canOpenMenu, canOpen)}
               >
                 <div className="history-item-main">
                   {editing ? (

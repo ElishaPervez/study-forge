@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
-export type HistoryMenuAction = "open" | "rename" | "delete" | "retry";
+export type HistoryMenuAction = "rename" | "delete" | "retry";
 
 export interface HistoryMenuEntry {
   action: HistoryMenuAction;
@@ -37,8 +37,9 @@ export const MENU_ANCHOR_GAP = 3;
 const UNMEASURED_MENU_SIZE: MenuSize = { width: 176, height: 118 };
 
 /**
- * The whole guide-maintenance vocabulary lives here, so the rail can keep its
- * cards clean and still expose every action through the context menu.
+ * The guide-maintenance vocabulary lives here, so the rail can keep its cards
+ * clean and still expose every remaining action through the context menu.
+ * Opening a ready guide is a plain left click on its card, not a menu action.
  */
 export function historyMenuEntries(status: string): HistoryMenuEntry[] {
   if (status === "failed" || status === "needs-attention") {
@@ -49,7 +50,6 @@ export function historyMenuEntries(status: string): HistoryMenuEntry[] {
   }
   if (status === "ok") {
     return [
-      { action: "open", label: "Open" },
       { action: "rename", label: "Rename" },
       { action: "delete", label: "Delete", tone: "danger" },
     ];

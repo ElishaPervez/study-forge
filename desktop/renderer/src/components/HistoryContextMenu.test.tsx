@@ -18,11 +18,11 @@ function fakeElement(overrides: Partial<HTMLElement> = {}): HTMLElement {
 }
 
 describe("historyMenuEntries", () => {
-  it("offers open, rename, and delete for a ready guide", () => {
+  it("offers rename and delete for a ready guide, which opens on a plain click", () => {
     const entries = historyMenuEntries("ok");
 
-    expect(entries.map((entry) => entry.label)).toEqual(["Open", "Rename", "Delete"]);
-    expect(entries[2].tone).toBe("danger");
+    expect(entries.map((entry) => entry.label)).toEqual(["Rename", "Delete"]);
+    expect(entries[1].tone).toBe("danger");
   });
 
   it.each(["failed", "needs-attention"])("offers retry and delete for a %s guide", (status) => {
@@ -123,8 +123,8 @@ describe("HistoryContextMenu", () => {
 
     expect(markup).toContain('role="menu"');
     expect(markup).toContain('aria-label="Guide options for Wave optics"');
-    expect(markup.match(/role="menuitem"/g)).toHaveLength(3);
-    expect(markup).toContain(">Open</button>");
+    expect(markup.match(/role="menuitem"/g)).toHaveLength(2);
+    expect(markup).not.toContain(">Open</button>");
     expect(markup).toContain(">Rename</button>");
     expect(markup).toContain("history-menu-item is-danger");
     expect(markup).toContain("left:20px");

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { GuideSummary } from "../api";
 import {
   HistoryList,
+  historyItemOpensGuide,
   resolveSubmittedGuideName,
   sortHistoryNewestFirst,
 } from "./HistoryList";
@@ -58,7 +59,7 @@ describe("HistoryList", () => {
       />,
     );
 
-    expect(markup.match(/class="history-item(?: is-active)?"/g)).toHaveLength(2);
+    expect(markup.match(/class="history-item(?: is-openable)?(?: is-active)?"/g)).toHaveLength(2);
     expect(markup.indexOf("Newer guide")).toBeLessThan(markup.indexOf("Older guide"));
     expect(markup.match(/Pages 2–4/g)).toHaveLength(2);
   });
@@ -85,6 +86,7 @@ describe("HistoryList", () => {
     expect(markup).toContain('aria-haspopup="menu"');
     expect(markup).toContain('aria-keyshortcuts="Shift+F10"');
     expect(markup).toContain('tabindex="0"');
+    expect(markup).not.toContain("is-openable");
     expect(markup).not.toContain(">Retry</button>");
     expect(markup).not.toContain(">Delete</button>");
     expect(markup).not.toContain(">Open</button>");
@@ -118,7 +120,7 @@ describe("HistoryList", () => {
     expect(markup).not.toContain("aria-haspopup");
   });
 
-  it("keeps Open, Rename, and Delete in a successful guide's context menu", () => {
+  it("marks a ready guide's card as openable and keeps Open out of its context menu", () => {
     const markup = renderToStaticMarkup(
       <HistoryList
         guides={[guide()]}
@@ -129,11 +131,22 @@ describe("HistoryList", () => {
       />,
     );
 
+    expect(markup).toContain('class="history-item is-openable"');
     expect(markup).toContain('aria-haspopup="menu"');
     expect(markup).toContain('tabindex="0"');
     expect(markup).not.toContain(">Open</button>");
     expect(markup).not.toContain(">Rename</button>");
     expect(markup).not.toContain(">Delete</button>");
+  });
+
+  it("only lets a ready, unlocked card open on a plain click", () => {
+    expect(historyItemOpensGuide("ok", false, false)).toBe(true);
+    expect(historyItemOpensGuide("ok", true, false)).toBe(false);
+    expect(historyItemOpensGuide("ok", false, true)).toBe(false);
+    expect(historyItemOpensGuide("failed", false, false)).toBe(false);
+    expect(historyItemOpensGuide("needs-attention", false, false)).toBe(false);
+    expect(historyItemOpensGuide("running", false, false)).toBe(false);
+    expect(historyItemOpensGuide("legacy", false, false)).toBe(false);
   });
 
   it("keeps a guide with an unavailable source readable in history", () => {
@@ -157,6 +170,7 @@ describe("HistoryList", () => {
     expect(markup).toContain("Choose the source again");
     expect(markup).toContain('role="alert"');
     expect(markup).toContain('aria-haspopup="menu"');
+    expect(markup).not.toContain("is-openable");
   });
 
   it("offers no context menu while the rail is busy or the guide has nothing to run", () => {
@@ -182,7 +196,9 @@ describe("HistoryList", () => {
 
     expect(busyMarkup).not.toContain("aria-haspopup");
     expect(busyMarkup).not.toContain("tabindex");
+    expect(busyMarkup).not.toContain("is-openable");
     expect(runningMarkup).not.toContain("aria-haspopup");
+    expect(runningMarkup).not.toContain("is-openable");
   });
 
   it("keeps the previous name when the submitted name is empty", () => {

@@ -1138,6 +1138,11 @@ h3 {
   transition: background-color 0.22s cubic-bezier(0.2, 0, 0, 1), transform 0.22s cubic-bezier(0.2, 0, 0, 1);
 }
 
+/* Only a ready guide opens on a plain left click; its card says so. */
+.history-item.is-openable {
+  cursor: pointer;
+}
+
 .history-item::before {
   content: "";
   position: absolute;
