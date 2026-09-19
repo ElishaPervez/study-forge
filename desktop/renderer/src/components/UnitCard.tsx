@@ -138,7 +138,7 @@ export function UnitCard({
               title={`Preview of ${unit.label}`}
               loading="lazy"
               referrerPolicy="no-referrer"
-              sandbox=""
+              sandbox="allow-scripts"
             />
           ) : (
             <div className="preview-placeholder">

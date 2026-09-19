@@ -391,12 +391,48 @@ def test_executable_tag_urls_are_repaired_even_if_checker_approves(tmp_path: Pat
     assert "executable" in repair_prompt
 
 
-def test_checker_passing_script_and_motion_candidate_is_repaired(tmp_path: Path) -> None:
+def test_canonical_motion_controller_is_allowed(tmp_path: Path) -> None:
     candidate = tmp_path / "motion.html"
     candidate.write_text(MOTION, encoding="utf-8")
     assert run_self_check(candidate, SKILL_DIR).ok is True
 
-    llm = ScriptedLLM([LLMReply(text=MOTION), LLMReply(text=GOOD)])
+    llm = ScriptedLLM([LLMReply(text=MOTION)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.calls == 1
+    assert result.status is UnitStatus.OK
+
+
+def test_safe_guide_controller_is_allowed(tmp_path: Path) -> None:
+    candidate = GOOD.replace(
+        "</body>",
+        "<script data-guide-controls>"
+        "document.querySelector('body').dataset.ready = 'true';"
+        "</script></body>",
+        1,
+    )
+    candidate_path = tmp_path / "safe-guide.html"
+    candidate_path.write_text(candidate, encoding="utf-8")
+    check = run_self_check(candidate_path, SKILL_DIR)
+    assert check.ok, check.findings
+    llm = ScriptedLLM([LLMReply(text=candidate)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.calls == 1
+    assert result.status is UnitStatus.OK
+
+
+def test_unsafe_guide_controller_is_repaired(tmp_path: Path) -> None:
+    candidate = GOOD.replace(
+        "</body>",
+        "<script data-guide-controls>fetch('https://example.com');</script></body>",
+        1,
+    )
+    llm = ScriptedLLM([LLMReply(text=candidate), LLMReply(text=GOOD)])
 
     result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
                            fonts_css="", out_dir=tmp_path / "out")
@@ -404,20 +440,7 @@ def test_checker_passing_script_and_motion_candidate_is_repaired(tmp_path: Path)
     assert result.calls == 2
     assert result.status is UnitStatus.OK
     repair_prompt = llm.seen[1][-1]["content"].lower()
-    assert "script" in repair_prompt
-    assert "motion" in repair_prompt
-
-
-def test_checker_passing_script_and_motion_candidate_gets_one_repair(tmp_path: Path) -> None:
-    llm = ScriptedLLM([LLMReply(text=MOTION), LLMReply(text=MOTION), LLMReply(text=GOOD)])
-
-    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
-                           fonts_css="", out_dir=tmp_path / "out")
-
-    assert result.calls == 2
-    assert result.status is UnitStatus.NEEDS_ATTENTION
-    assert result.artifact_path.is_file()
-    assert "<script" in result.artifact_path.read_text(encoding="utf-8").lower()
+    assert "network" in repair_prompt
 
 
 def test_preamble_and_markdown_fence_are_stripped_without_a_repair_call(

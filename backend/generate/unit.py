@@ -26,24 +26,27 @@ MAX_CALLS = 3
 MAX_TOOL_TURNS = 6
 RETRY_BACKOFF_BASE_SECONDS = 0.1
 RETRY_BACKOFF_MAX_SECONDS = 1.0
-V1_MOTION_ATTRIBUTES = {
-    "data-motion",
-    "data-motion-root",
-    "data-motion-item",
-    "data-motion-action",
-    "data-motion-controls",
-    "data-motion-status",
-    "data-motion-decorative",
-    "data-motion-mode",
-    "data-motion-state",
-    "data-motion-step-label",
-    "data-step",
-    "data-step-count",
-    "data-step-current",
-    "data-frame",
-    "data-static-frame",
-}
 V1_FORBIDDEN_TAGS = {"base", "embed", "object", "iframe"}
+ALLOWED_SCRIPT_ATTRIBUTES = {
+    "data-guide-controls",
+    "data-diagram-controls",
+}
+FORBIDDEN_SCRIPT_PATTERNS = (
+    (r"\bfetch\s*\(", "network fetch calls"),
+    (r"\bXMLHttpRequest\b", "XMLHttpRequest"),
+    (r"\bWebSocket\b", "WebSocket"),
+    (r"\bimport\s*(?:\(|[\\'\"])", "dynamic imports"),
+    (r"\beval\s*\(", "eval"),
+    (r"\bFunction\s*\(", "Function constructor"),
+    (r"\bnew\s+Function\b", "Function constructor"),
+    (r"\binnerHTML\b", "innerHTML injection"),
+    (r"\binsertAdjacentHTML\b", "insertAdjacentHTML injection"),
+    (r"\bdocument\.write\s*\(", "document.write injection"),
+    (r"\b(?:setTimeout|setInterval)\s*\(\s*[\\'\"]", "string-to-code timers"),
+    (r"\bnavigator\.sendBeacon\b", "beacon network calls"),
+    (r"\bdocument\.cookie\b", "cookie access"),
+    (r"\b(?:https?:)?//", "remote URL references"),
+)
 V1_URL_ATTRIBUTES = {
     "src",
     "href",
@@ -206,6 +209,8 @@ class _V1OutputPolicyParser(HTMLParser):
         self._inside_html = False
         self._style_depth = 0
         self._css_chunks: list[str] = []
+        self.scripts: list[dict[str, object]] = []
+        self._current_script: dict[str, object] | None = None
 
     def _add(self, finding: str) -> None:
         if finding not in self.findings:
@@ -226,7 +231,15 @@ class _V1OutputPolicyParser(HTMLParser):
             self._add(f"v1 output policy forbids <{tag}> outside the complete <html> document")
 
         if tag == "script":
-            self._add("v1 output policy forbids <script> tags")
+            script = {"attrs": normalized, "body": []}
+            self.scripts.append(script)
+            self._current_script = script
+            attr_names = [key for key, _value in normalized]
+            if len(attr_names) != 1 or attr_names[0] not in ALLOWED_SCRIPT_ATTRIBUTES:
+                self._add(
+                    "v1 output policy allows only <script data-guide-controls> or "
+                    "the canonical <script data-diagram-controls>"
+                )
         if tag in V1_FORBIDDEN_TAGS:
             self._add(f"v1 output policy forbids <{tag}> tags")
 
@@ -235,8 +248,6 @@ class _V1OutputPolicyParser(HTMLParser):
                 self._add(f"v1 output policy forbids executable attribute {key}")
             if key == "srcdoc":
                 self._add("v1 output policy forbids srcdoc attributes")
-            if key in V1_MOTION_ATTRIBUTES or key.startswith("data-motion-"):
-                self._add("v1 output policy forbids motion markup")
             if key == "srcset":
                 for finding in _srcset_policy_findings(value):
                     self._add(finding)
@@ -268,10 +279,16 @@ class _V1OutputPolicyParser(HTMLParser):
                 self._inside_html = False
         elif not self._inside_html:
             self._add(f"v1 output policy forbids </{tag}> outside the complete <html> document")
+        if tag == "script":
+            self._current_script = None
         if tag == "style" and self._style_depth:
             self._style_depth -= 1
 
     def handle_data(self, data: str) -> None:
+        if self._current_script is not None:
+            body = self._current_script["body"]
+            assert isinstance(body, list)
+            body.append(data)
         if self._style_depth:
             self._css_chunks.append(data)
         if data.strip() and not self._inside_html:
@@ -288,6 +305,11 @@ def _v1_output_policy_findings(html: str) -> list[str]:
         parser._add("v1 output policy requires a closing </html> tag")
     for finding in _css_policy_findings("".join(parser._css_chunks)):
         parser._add(finding)
+    for script in parser.scripts:
+        body = "".join(str(part) for part in script["body"])
+        for pattern, label in FORBIDDEN_SCRIPT_PATTERNS:
+            if re.search(pattern, body, re.IGNORECASE):
+                parser._add(f"v1 output policy forbids {label} in inline guide scripts")
     return parser.findings
 
 

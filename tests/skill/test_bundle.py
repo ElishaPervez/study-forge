@@ -11,6 +11,8 @@ def test_system_prompt_carries_the_style_guide_tokens() -> None:
     assert "#2d3142" in bundle.system_prompt      # ink
     assert "#eb6c36" in bundle.system_prompt      # accent
     assert "Instrument Serif" in bundle.system_prompt
+    assert "Universal learning architecture" in bundle.system_prompt
+    assert "data-guide-controls" in bundle.system_prompt
 
 
 def test_system_prompt_omits_the_first_run_gate() -> None:

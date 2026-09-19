@@ -539,8 +539,7 @@ describe("Study Forge visual availability markers", () => {
     expect(markup).toContain('class="artifact-frame"');
     expect(markup).toMatch(/srcdoc=/i);
     expect(markup).not.toContain('src="http://127.0.0.1:53124/api/guides/guide-1/artifact.html"');
-    expect(markup).toContain('sandbox="allow-same-origin"');
-    expect(markup).not.toContain("allow-scripts");
+    expect(markup).toContain('sandbox="allow-scripts allow-same-origin"');
     expect(markup).toContain('role="dialog"');
     expect(markup).toContain("Selected text");
   });

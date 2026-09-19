@@ -278,7 +278,7 @@ export const GuideCard = memo(function GuideCard({
                 title={`Preview of ${guide.name}`}
                 loading="lazy"
                 referrerPolicy="no-referrer"
-                sandbox="allow-same-origin"
+                sandbox="allow-scripts allow-same-origin"
               />
               {artifactLoadState === "loading" ? (
                 <div className="artifact-frame-state" role="status" aria-live="polite">

@@ -28,11 +28,15 @@ class Bundle:
 def load_bundle(skill_dir: Path) -> Bundle:
     skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
     style_guide = (skill_dir / "references" / "style-guide.md").read_text(encoding="utf-8")
+    study_guide = (skill_dir / "references" / "study-guide.md").read_text(encoding="utf-8")
     system_prompt = (
         strip_first_run_gate(skill_md)
         + "\n\n---\n\n"
         + "# Active style guide (effective, do not ask about it)\n\n"
         + style_guide
+        + "\n\n---\n\n"
+        + "# Active study-guide system (effective, follow when producing a guide)\n\n"
+        + study_guide
     )
     return Bundle(
         system_prompt=system_prompt,

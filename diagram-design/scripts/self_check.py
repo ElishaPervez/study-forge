@@ -7,10 +7,10 @@ Ships inside the skill so an installed agent can verify its own output:
 
 Checks the accessible-SVG contract, the single-file safety rules (no remote
 assets beyond the approved Google Fonts stylesheet, no executable attributes,
-no scripts other than the one canonical motion controller), and — when motion
-markup is present — the structural motion contract. This is a distilled
-subset of the repository gates (`lint-skin.py`, `verify-motion.py`), which
-remain the authority for contributions to the repository itself.
+and only explicitly marked safe guide scripts or the canonical motion controller),
+and — when motion markup is present — the structural motion contract. This is a
+distilled subset of the repository gates (`lint-skin.py`, `verify-motion.py`),
+which remain the authority for contributions to the repository itself.
 """
 
 from __future__ import annotations
@@ -27,6 +27,22 @@ SKILL_DIR = Path(__file__).resolve().parent.parent
 MOTION_TEMPLATE = SKILL_DIR / "assets" / "template-motion.html"
 MODES = {"none", "reveal", "step", "loop"}
 ACTIONS = {"play", "pause", "replay", "prev", "next"}
+ALLOWED_SCRIPT_ATTRIBUTES = {"data-guide-controls", "data-diagram-controls"}
+GUIDE_SCRIPT_FORBIDDEN = (
+    (r"\bfetch\s*\(", "network fetch calls"),
+    (r"\bXMLHttpRequest\b", "XMLHttpRequest"),
+    (r"\bWebSocket\b", "WebSocket"),
+    (r"\bimport\s*(?:\(|['\"])", "dynamic imports"),
+    (r"\beval\s*\(", "eval"),
+    (r"\b(?:new\s+)?Function\s*\(", "Function constructor"),
+    (r"\binnerHTML\b", "innerHTML injection"),
+    (r"\binsertAdjacentHTML\b", "insertAdjacentHTML injection"),
+    (r"\bdocument\.write\s*\(", "document.write injection"),
+    (r"\b(?:setTimeout|setInterval)\s*\(\s*['\"]", "string-to-code timers"),
+    (r"\bnavigator\.sendBeacon\b", "beacon network calls"),
+    (r"\bdocument\.cookie\b", "cookie access"),
+    (r"\b(?:https?:)?//", "remote URL references"),
+)
 ASCII_DECIMAL_RE = re.compile(r"^[0-9]+$")
 REFERENCE_ATTRS = {"src", "href", "xlink:href", "poster", "srcset", "action", "formaction"}
 
@@ -247,8 +263,6 @@ def check_svgs(parser: DiagramParser, errors: list[str]) -> None:
 def check_scripts(parser: DiagramParser, errors: list[str]) -> None:
     if not parser.scripts:
         return
-    if len(parser.scripts) > 1:
-        errors.append(f"at most one script is allowed; found {len(parser.scripts)}")
     for number, script in enumerate(parser.scripts, 1):
         attrs = script["attrs"]
         attr_names = script["attr_names"]
@@ -256,18 +270,35 @@ def check_scripts(parser: DiagramParser, errors: list[str]) -> None:
         assert isinstance(attrs, dict) and isinstance(attr_names, list) and isinstance(body, list)
         if not script["closed"]:
             errors.append(f"script {number} must have a closing script tag")
-        if attr_names != ["data-diagram-controls"] or attrs.get("data-diagram-controls") != "":
-            errors.append(f"script {number} must carry only the canonical data-diagram-controls attribute")
+        if len(attr_names) != 1 or attr_names[0] not in ALLOWED_SCRIPT_ATTRIBUTES or attrs.get(attr_names[0]) != "":
+            errors.append(
+                f"script {number} must carry only data-guide-controls or "
+                "data-diagram-controls"
+            )
             continue
-        try:
-            if normalized_controller("".join(body)) != canonical_controller():
-                errors.append(f"script {number} must exactly match the controller in template-motion.html")
-        except RuntimeError as exc:
-            errors.append(str(exc))
+        source = normalized_controller("".join(body))
+        if attr_names[0] == "data-diagram-controls":
+            try:
+                if source != canonical_controller():
+                    errors.append(f"script {number} must exactly match the controller in template-motion.html")
+            except RuntimeError as exc:
+                errors.append(str(exc))
+        else:
+            for pattern, label in GUIDE_SCRIPT_FORBIDDEN:
+                if re.search(pattern, source, re.IGNORECASE):
+                    errors.append(f"guide script {number} uses forbidden {label}")
 
 
 def check_motion(parser: DiagramParser, source: str, errors: list[str]) -> None:
-    has_motion_markup = bool(parser.roots or parser.items or parser.scripts)
+    has_motion_markup = bool(
+        parser.roots
+        or parser.items
+        or any(
+            isinstance(script.get("attrs"), dict)
+            and "data-diagram-controls" in script["attrs"]
+            for script in parser.scripts
+        )
+    )
     if not has_motion_markup:
         return
     if len(parser.roots) != 1:

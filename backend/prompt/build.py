@@ -6,10 +6,24 @@ from html.parser import HTMLParser
 OUTPUT_POLICY = """\
 Hard requirements:
 - Return the raw HTML document only. No markdown fences, no commentary.
-- No <script> tags and no motion markup.
+- Return a complete student study guide, not a diagram gallery or a prose dump.
+- Follow the study-guide architecture: orientation, conceptual spine, numbered sections,
+  meaningful visuals, exam/application layer, retrieval practice, and closing recall.
+  Do not force a section when the source does not support it, but make the guide feel like
+  a coherent learning journey rather than unrelated cards.
+- Read the `study-guide.md` reference before writing. Use the matching diagram reference
+  for every substantial visual and `animation.md` when a sequence interaction is used.
+- The guide may use one or more inline `<script data-guide-controls>` blocks for bounded,
+  deterministic offline interactions. JavaScript is optional per component, but when used
+  it must have a complete static/no-JS fallback and must obey the safe interaction contract.
+- Guide scripts must not use fetch, XMLHttpRequest, WebSocket, import, eval, Function,
+  innerHTML, insertAdjacentHTML, string-to-code timers, external resources, or untrusted
+  HTML injection. Use fixed DOM nodes, textContent, native controls, and local state.
 - No remote assets: fonts are embedded, and nothing loads from the network.
-- The diagram <svg> needs role="img", with <title> as its first child, non-empty
-  <title> and <desc>, and aria-labelledby naming those two ids in order.
+- No event-handler attributes such as onclick; bind behavior from the guide script.
+- Every diagram `<svg>` needs role="img", with `<title>` as its first child, non-empty
+  `<title>` and `<desc>`, and aria-labelledby naming those two ids in that order.
+- Use reduced-motion and print fallbacks; controls must be labelled and keyboard accessible.
 """
 
 
@@ -20,9 +34,9 @@ def build_initial_message(
     return (
         f"Source: {source_description}\n\n"
         "Create ONE self-contained HTML study guide from the attached source material. "
-        "Use the fixed Diagram-design system in your system context to decide the guide's "
-        "structure, diagrams, typography, and visual hierarchy. Do not ask for or rely on "
-        "any additional topic or writing request.\n\n"
+        "Use the fixed Diagram-design system and study-guide reference in your system context "
+        "to decide the guide's structure, diagrams, typography, visual hierarchy, and bounded "
+        "offline interactions. Do not ask for or rely on any additional topic or writing request.\n\n"
         "Include one concise, human-readable <title> in the HTML <head>; that title will be "
         "used as the guide name.\n\n"
         + OUTPUT_POLICY
@@ -32,7 +46,8 @@ def build_initial_message(
 def build_revision_message(selected_text: str, instruction: str, current_html: str) -> str:
     return (
         "Revise the current study guide using the selected text and the requested change. "
-        "Return the full revised HTML document, not a fragment or a diff.\n\n"
+        "Return the full revised HTML document, not a fragment or a diff. Preserve the study-guide "
+        "architecture and any valid offline interactions unless the requested change replaces them.\n\n"
         "Selected text:\n<selected-text>\n"
         f"{selected_text}\n"
         "</selected-text>\n\n"
@@ -43,7 +58,7 @@ def build_revision_message(selected_text: str, instruction: str, current_html: s
         f"{current_html}\n"
         "</current-html>\n\n"
         "Return only the complete revised HTML document. Preserve the offline, accessible SVG, "
-        "and no-motion output policy below.\n\n"
+        "safe-interaction, print, and reduced-motion output policies below.\n\n"
         + OUTPUT_POLICY
     )
 
@@ -110,14 +125,22 @@ Attached: {count} page image(s) of the source material, in order.
 Page count: {count} pages.
 
 Read the pages, then produce ONE self-contained HTML study artifact for this unit,
-following the design system in your instructions.
+following the design system and study-guide architecture in your instructions.
 
 Hard requirements:
 - Return the raw HTML document only. No markdown fences, no commentary.
-- No <script> tags and no motion markup.
+- Build a coherent learning journey: orientation, conceptual spine, numbered sections,
+  meaningful visuals, exam/application guidance, retrieval practice, and closing recall.
+- Read `study-guide.md` before writing and read relevant diagram references before drawing.
+- Bounded inline `<script data-guide-controls>` interactions are allowed only when they improve
+  understanding. Every interaction needs a complete static/no-JS fallback, local deterministic
+  state, accessible controls, and print/reduced-motion behavior.
+- Guide scripts must not use fetch, XMLHttpRequest, WebSocket, import, eval, Function,
+  innerHTML, insertAdjacentHTML, string-to-code timers, external resources, or untrusted
+  HTML injection. Do not use onclick or other executable attributes.
 - No remote assets: fonts are embedded, and nothing loads from the network.
-- The diagram <svg> needs role="img", with <title> as its first child, non-empty
-  <title> and <desc>, and aria-labelledby naming those two ids in order.
+- Every diagram `<svg>` needs role="img", with `<title>` as its first child, non-empty
+  `<title>` and `<desc>`, and aria-labelledby naming those two ids in order.
 """
 
 

@@ -10,7 +10,7 @@ SKILL_DIR = Path("diagram-design")
 def test_manifest_finds_every_reference() -> None:
     manifest = build_manifest(SKILL_DIR / "references")
 
-    assert len(manifest) == 53
+    assert len(manifest) == 54
     assert "type-architecture.md" in manifest
     assert manifest["type-architecture.md"].title == "Architecture"
 
