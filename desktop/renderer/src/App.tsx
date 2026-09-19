@@ -27,6 +27,7 @@ import {
   type SourceDraft,
 } from "./components/SourceIntake";
 import type { ImageFile } from "./components/ImageGroupEditor";
+import { GlobalDropIndicator, useGlobalFileDrop } from "./useGlobalFileDrop";
 
 type StartupState = "starting" | "ready" | "error";
 export type WorkState =
@@ -675,6 +676,31 @@ export function App() {
     }
   };
 
+  // Global window drop: routes through the same validated intake path as the
+  // rail drop card (`classifySourcePaths` -> `handlePathsSelected`).
+  const handleWindowFilesDropped = useCallback((files: File[]) => {
+    if (!window.lessonGen) return;
+    const paths = files.map((file) => window.lessonGen?.pathForFile(file) ?? "")
+      .filter((path) => path.length > 0);
+    if (paths.length === 0) {
+      setSourceError("Choose one PDF or one or more images.");
+      return;
+    }
+    const classification = classifySourcePaths(paths);
+    if ("error" in classification) {
+      setSourceError(classification.error);
+      return;
+    }
+    void handlePathsSelected(paths);
+    // handlePathsSelected is re-created each render; keying on its inputs keeps the
+    // drop callback fresh without re-registering the window listeners every render.
+  }, [api, isBusy, source]);
+
+  const globalDropOverlayVisible = useGlobalFileDrop({
+    disabled: startupState !== "ready" || isBusy,
+    onFilesDropped: handleWindowFilesDropped,
+  });
+
   const handleImagesChange = (files: ImageFile[]) => {
     if (api === null || source === null || source.kind !== "images" || isBusy) return;
 
@@ -1228,6 +1254,7 @@ export function App() {
           </section>
         </main>
       </div>
+      {globalDropOverlayVisible ? <GlobalDropIndicator /> : null}
     </section>
   );
 }
