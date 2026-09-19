@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash-20260910"
+DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
 
 
 @dataclass(frozen=True)

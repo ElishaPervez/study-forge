@@ -3,128 +3,128 @@ from pathlib import Path
 import pymupdf
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from backend.api.app import create_app
-from backend.generate.unit import UnitResult, UnitStatus
+from backend.llm.client import LLMReply
 from backend.settings import Settings
 
+SKILL_DIR = Path("diagram-design")
+GOOD = (SKILL_DIR / "assets" / "template.html").read_text(encoding="utf-8")
 
-class RecordingLLM:
-    def __init__(self, template: str) -> None:
-        self._template = template
-        self.calls = 0
 
-    def complete(self, messages, tools=None):
-        from backend.llm.client import LLMReply
+class QueueLLM:
+    def __init__(self, replies: list[object] | None = None) -> None:
+        self.replies = list(replies or [])
+        self.seen: list[list[dict]] = []
 
-        self.calls += 1
-        return LLMReply(text=self._template)
+    def complete(self, messages, tools=None) -> LLMReply:
+        self.seen.append(list(messages))
+        reply = self.replies.pop(0)
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
 
 
 @pytest.fixture()
 def client(tmp_path: Path) -> TestClient:
     pdf = tmp_path / "source.pdf"
-    doc = pymupdf.open()
-    for number in range(6):
-        page = doc.new_page(width=595, height=842)
+    document = pymupdf.open()
+    for number in range(3):
+        page = document.new_page(width=595, height=842)
         page.insert_text((72, 120), f"Page {number + 1}")
-    doc.save(pdf)
-    doc.close()
+    document.save(pdf)
+    document.close()
+
     settings = Settings(
         openrouter_api_key="sk-test",
-        model="deepseek/deepseek-v4.1-flash-20260910",
+        model="deepseek/deepseek-v4.1-flash",
         reasoning_effort="low",
         max_output_tokens=32768,
-        skill_dir=Path("diagram-design"),
+        skill_dir=SKILL_DIR,
         jobs_dir=tmp_path / "jobs",
     )
-    template = (Path("diagram-design") / "assets" / "template.html").read_text(encoding="utf-8")
-    app = create_app(settings, llm=RecordingLLM(template))
+    app = create_app(settings, llm=QueueLLM())
     app.state.source_pdf = pdf
+    app.state.source_image = tmp_path / "page.png"
+    Image.new("RGB", (2, 2), (25, 75, 125)).save(app.state.source_image, format="PNG")
     return TestClient(app)
 
 
-def test_create_job_returns_units_with_page_ranges(client: TestClient) -> None:
-    response = client.post(
-        "/api/jobs",
-        json={"pdf": str(client.app.state.source_pdf), "ranges": [["Unit A", 1, 3], ["Unit B", 4, 6]]},
-    )
-
-    assert response.status_code == 200
-    job = response.json()
-    assert job["page_count"] == 6
-    assert [unit["label"] for unit in job["units"]] == ["Unit A", "Unit B"]
-
-
-def test_generate_writes_artifact_that_both_routes_serve_identically(client: TestClient) -> None:
-    job = client.post(
-        "/api/jobs",
-        json={"pdf": str(client.app.state.source_pdf), "ranges": [["Unit A", 1, 2]]},
-    ).json()
-    unit_id = job["units"][0]["unit_id"]
-
-    generated = client.post(f"/api/jobs/{job['job_id']}/units/{unit_id}/generate")
-
-    assert generated.status_code == 200
-    assert generated.json()["status"] == "ok"
-    assert generated.json()["artifact_url"] == (
-        f"/api/jobs/{job['job_id']}/units/{unit_id}/artifact.html"
-    )
-
-    inline = client.get(f"/api/jobs/{job['job_id']}/units/{unit_id}/artifact.html")
-    download = client.get(
-        f"/api/jobs/{job['job_id']}/units/{unit_id}/artifact.html?download=1"
-    )
-
-    assert inline.status_code == 200
-    assert inline.content == download.content
-    assert "attachment" in download.headers["content-disposition"]
-    assert inline.headers["content-disposition"].startswith("inline")
-
-
-@pytest.mark.parametrize("status", [UnitStatus.FAILED, UnitStatus.NEEDS_ATTENTION])
-def test_generation_without_published_artifact_returns_null_artifact_url(
-    client: TestClient, monkeypatch, status: UnitStatus
+def test_source_registration_reuses_storage_and_reports_current_files(
+    client: TestClient,
 ) -> None:
-    job = client.post(
-        "/api/jobs",
-        json={"pdf": str(client.app.state.source_pdf), "ranges": [["Unit A", 1, 2]]},
+    path = str(client.app.state.source_pdf)
+
+    first = client.post("/api/sources", json={"paths": [path]})
+    second = client.post("/api/sources", json={"paths": [path]})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["source_id"] == first.json()["source_id"]
+    assert second.json()["files"] == first.json()["files"]
+    assert second.json()["file_details"][0]["name"] == "source.pdf"
+
+    source_id = first.json()["source_id"]
+    detail = client.get(f"/api/sources/{source_id}")
+    assert detail.status_code == 200
+    assert detail.json()["page_count"] == 3
+    assert detail.json()["file_details"][0]["exists"] is True
+
+
+def test_source_registration_accepts_one_pdf_or_an_image_group_but_not_mixed(
+    client: TestClient,
+) -> None:
+    pdf = str(client.app.state.source_pdf)
+    image = str(client.app.state.source_image)
+
+    assert client.post("/api/sources", json={"paths": [pdf, pdf]}).status_code == 400
+    assert client.post("/api/sources", json={"paths": [pdf, image]}).status_code == 400
+
+    images = client.post("/api/sources", json={"paths": [image, image]})
+    assert images.status_code == 200
+    assert images.json()["kind"] == "images"
+    assert images.json()["image_count"] == 2
+
+
+def test_pdf_page_preview_is_available_from_the_stored_source(client: TestClient) -> None:
+    source = client.post(
+        "/api/sources", json={"paths": [str(client.app.state.source_pdf)]}
     ).json()
-    unit_id = job["units"][0]["unit_id"]
 
-    def generate_without_artifact(*args, **kwargs) -> UnitResult:
-        return UnitResult(
-            status=status,
-            calls=1,
-            artifact_path=None,
-            findings=["no artifact was published"],
-        )
+    preview = client.get(f"/api/sources/{source['source_id']}/pages/2")
 
-    monkeypatch.setattr("backend.api.app.generate_unit", generate_without_artifact)
-
-    response = client.post(f"/api/jobs/{job['job_id']}/units/{unit_id}/generate")
-
-    assert response.status_code == 200
-    assert response.json()["status"] == status.value
-    assert response.json()["artifact_url"] is None
-    assert client.get(f"/api/jobs/{job['job_id']}/units/{unit_id}/artifact.html").status_code == 404
+    assert preview.status_code == 200
+    assert preview.headers["content-type"].startswith("image/jpeg")
+    assert preview.content.startswith(b"\xff\xd8")
 
 
-def test_generate_is_refused_for_a_status_that_is_not_pending(client: TestClient) -> None:
-    job = client.post(
-        "/api/jobs",
-        json={"pdf": str(client.app.state.source_pdf), "ranges": [["Unit A", 1, 2]]},
+def test_source_delete_removes_unreferenced_source_and_keeps_referenced_source(
+    client: TestClient,
+) -> None:
+    source = client.post(
+        "/api/sources", json={"paths": [str(client.app.state.source_image)]}
     ).json()
-    unit_id = job["units"][0]["unit_id"]
-    client.post(f"/api/jobs/{job['job_id']}/units/{unit_id}/generate")
+    guide = client.post(
+        "/api/guides",
+        json={"source_id": source["source_id"], "selection": {"mode": "images"}},
+    ).json()
 
-    again = client.post(f"/api/jobs/{job['job_id']}/units/{unit_id}/generate")
+    retained = client.delete(f"/api/sources/{source['source_id']}")
 
-    assert again.json()["status"] == "ok"
-    assert client.app.state.llm.calls == 1  # re-running an ok unit is a no-op
+    assert retained.status_code == 200
+    assert retained.json()["source_id"] == source["source_id"]
+    assert retained.json()["retained"] is True
+    assert client.get(f"/api/guides/{guide['guide_id']}").status_code == 200
 
+    client.delete(f"/api/guides/{guide['guide_id']}")
+    assert client.get(f"/api/sources/{source['source_id']}").status_code == 404
 
-def test_artifact_route_validates_the_job_id(client: TestClient) -> None:
-    response = client.get("/api/jobs/..%2F..%2Fetc/units/x/artifact.html")
+    unreferenced = client.post(
+        "/api/sources", json={"paths": [str(client.app.state.source_image)]}
+    ).json()
+    removed = client.delete(f"/api/sources/{unreferenced['source_id']}")
 
-    assert response.status_code in {400, 404}
+    assert removed.status_code == 200
+    assert removed.json()["deleted"] is True
+    assert client.get(f"/api/sources/{source['source_id']}").status_code == 404

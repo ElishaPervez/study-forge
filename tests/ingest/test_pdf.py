@@ -5,7 +5,8 @@ import pymupdf
 import pytest
 from PIL import Image
 
-from backend.ingest.pdf import MAX_EDGE, page_count, rasterize
+from backend.ingest.pdf import MAX_EDGE, page_count, preview_page, rasterize
+from backend.ingest.source import source_inputs, store_source
 
 
 @pytest.fixture()
@@ -158,3 +159,65 @@ def test_rasterize_is_idempotent(tmp_path: Path, fixture_pdf: Path) -> None:
     second = rasterize(fixture_pdf, [1], out_dir)
 
     assert second[0].path.stat().st_mtime_ns == stamp
+
+
+def test_preview_page_uses_bounded_jpeg_in_a_preview_cache(
+    tmp_path: Path, fixture_pdf: Path
+) -> None:
+    preview = preview_page(fixture_pdf, 2, tmp_path / "previews")
+
+    assert preview.page_number == 2
+    assert preview.path.parent.name == "previews"
+    assert preview.path.suffix == ".jpg"
+    assert max(preview.width, preview.height) <= MAX_EDGE
+    with Image.open(preview.path) as image:
+        assert image.format == "JPEG"
+
+
+def test_source_inputs_renders_only_the_requested_inclusive_pdf_pages(
+    tmp_path: Path, fixture_pdf: Path
+) -> None:
+    source = store_source(tmp_path / "jobs", [fixture_pdf], "pdf")
+
+    inputs = source_inputs(source, {"mode": "custom", "start": 2, "end": 4})
+
+    assert [item.ordinal for item in inputs] == [2, 3, 4]
+    assert [item.media_type for item in inputs] == ["image/jpeg"] * 3
+    assert [item.source_label for item in inputs] == ["Page 2", "Page 3", "Page 4"]
+    assert all(item.path.is_file() for item in inputs)
+
+
+def test_source_inputs_preserves_original_image_bytes_and_media_types(tmp_path: Path) -> None:
+    png = tmp_path / "first.png"
+    webp = tmp_path / "second.webp"
+    png.write_bytes(b"original png bytes")
+    webp.write_bytes(b"original webp bytes")
+    source = store_source(tmp_path / "jobs", [png, webp], "images")
+
+    inputs = source_inputs(source, {"mode": "images"})
+
+    assert [item.ordinal for item in inputs] == [1, 2]
+    assert [item.media_type for item in inputs] == ["image/png", "image/webp"]
+    assert [item.path.read_bytes() for item in inputs] == [png.read_bytes(), webp.read_bytes()]
+
+
+def test_store_source_rejects_mixed_pdf_and_image_paths(tmp_path: Path, fixture_pdf: Path) -> None:
+    image = tmp_path / "page.png"
+    image.write_bytes(b"image bytes")
+
+    with pytest.raises(ValueError, match="mixed"):
+        store_source(tmp_path / "jobs", [fixture_pdf, image], "images")
+
+
+@pytest.mark.parametrize("suffix", [".bmp", ".tiff", ""])
+def test_store_source_rejects_unsupported_image_before_copying(
+    tmp_path: Path, suffix: str
+) -> None:
+    image = tmp_path / f"unsupported{suffix}"
+    image.write_bytes(b"unsupported image bytes")
+    jobs_dir = tmp_path / "jobs"
+
+    with pytest.raises(ValueError, match="unsupported image format"):
+        store_source(jobs_dir, [image], "images")
+
+    assert not (jobs_dir / "sources").exists()

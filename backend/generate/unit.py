@@ -12,9 +12,10 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from backend.fonts.embed import inject_fonts
-from backend.ingest.pdf import PageImage
+from backend.ingest.pdf import InputImage
+from backend.jobs.schema import Selection, SourceKind
 from backend.llm.client import LLM, LLMError, LLMReply, ToolCall, image_part
-from backend.prompt.build import build_unit_message
+from backend.prompt.build import build_initial_message, build_unit_message
 from backend.skill.bundle import Bundle
 from backend.skill.manifest import get_reference
 from backend.verify.self_check import CheckResult, run_self_check
@@ -86,6 +87,8 @@ def _decode_css_escapes(value: str) -> str:
 
 def _url_policy_finding(value: str, *, css: bool) -> str | None:
     lowered = value.strip().casefold()
+    if lowered.startswith("#"):
+        return None
     if lowered.startswith(_EXECUTABLE_URL_PREFIXES):
         return "v1 output policy forbids executable URL schemes"
     if lowered.startswith(("http://", "https://", "//")):
@@ -102,7 +105,49 @@ def _url_policy_finding(value: str, *, css: bool) -> str | None:
         if css:
             return "v1 output policy forbids non-image or embedded-font CSS data URLs"
         return "v1 output policy forbids non-image data URLs on tags"
-    return None
+    return "v1 output policy forbids relative or local asset/style URLs"
+
+
+def _srcset_urls(value: str) -> list[str]:
+    urls: list[str] = []
+    index = 0
+    length = len(value)
+    while index < length:
+        while index < length and (value[index].isspace() or value[index] == ","):
+            index += 1
+        if index >= length:
+            break
+
+        start = index
+        if value[index : index + 5].casefold() == "data:":
+            header_end = value.find(",", index)
+            if header_end == -1:
+                while index < length and not value[index].isspace():
+                    index += 1
+            else:
+                index = header_end + 1
+                while index < length and not value[index].isspace() and value[index] != ",":
+                    index += 1
+        else:
+            while index < length and not value[index].isspace() and value[index] != ",":
+                index += 1
+        if start < index:
+            urls.append(value[start:index])
+
+        while index < length and value[index] != ",":
+            index += 1
+        if index < length:
+            index += 1
+    return urls
+
+
+def _srcset_policy_findings(value: str) -> list[str]:
+    findings: list[str] = []
+    for candidate in _srcset_urls(value):
+        finding = _url_policy_finding(candidate, css=False)
+        if finding is not None and finding not in findings:
+            findings.append(finding)
+    return findings
 
 
 def _css_policy_findings(css: str) -> list[str]:
@@ -135,7 +180,9 @@ class UnitRequest:
     unit_id: str
     label: str
     page_numbers: list[int]
-    pages: list[PageImage]
+    pages: list[InputImage]
+    source_kind: SourceKind = "pdf"
+    selection: Selection | None = None
 
 
 @dataclass(frozen=True)
@@ -187,7 +234,10 @@ class _V1OutputPolicyParser(HTMLParser):
                 self._add("v1 output policy forbids srcdoc attributes")
             if key in V1_MOTION_ATTRIBUTES or key.startswith("data-motion-"):
                 self._add("v1 output policy forbids motion markup")
-            if key in V1_URL_ATTRIBUTES:
+            if key == "srcset":
+                for finding in _srcset_policy_findings(value):
+                    self._add(finding)
+            elif key in V1_URL_ATTRIBUTES:
                 finding = _url_policy_finding(value, css=False)
                 if finding:
                     self._add(finding)
@@ -403,9 +453,14 @@ def generate_unit(
     artifact_path = artifacts / "artifact.html"
     published = False
 
-    content: list[dict] = [image_part(page) for page in request.pages]
+    content: list[dict] = [image_part(image) for image in request.pages]
+    initial_message = (
+        build_initial_message(request.source_kind, len(request.pages), request.selection)
+        if request.selection is not None
+        else build_unit_message(request.label, request.page_numbers)
+    )
     content.append(
-        {"type": "text", "text": build_unit_message(request.label, request.page_numbers)}
+        {"type": "text", "text": initial_message}
     )
     messages: list[dict] = [
         {"role": "system", "content": bundle.system_prompt},

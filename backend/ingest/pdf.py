@@ -16,11 +16,46 @@ ZOOM = 200 / 72
 
 
 @dataclass(frozen=True)
-class PageImage:
-    page_number: int
+class InputImage:
+    ordinal: int
     path: Path
+    media_type: str
+    source_label: str
+
+    def __init__(
+        self,
+        ordinal: int,
+        path: Path,
+        media_type: str,
+        source_label: str | None = None,
+        *,
+        label: str | None = None,
+    ) -> None:
+        if source_label is None:
+            source_label = label
+        if not source_label:
+            raise ValueError("an input image source label is required")
+        object.__setattr__(self, "ordinal", ordinal)
+        object.__setattr__(self, "path", Path(path))
+        object.__setattr__(self, "media_type", media_type)
+        object.__setattr__(self, "source_label", source_label)
+
+    @property
+    def label(self) -> str:
+        return self.source_label
+
+
+@dataclass(frozen=True, init=False)
+class PageImage(InputImage):
+    page_number: int
     width: int
     height: int
+
+    def __init__(self, page_number: int, path: Path, width: int, height: int) -> None:
+        InputImage.__init__(self, page_number, path, "image/jpeg", f"Page {page_number}")
+        object.__setattr__(self, "page_number", page_number)
+        object.__setattr__(self, "width", width)
+        object.__setattr__(self, "height", height)
 
 
 def _read_cached_page(number: int, target: Path, max_edge: int) -> PageImage | None:
@@ -88,3 +123,18 @@ def rasterize(
             _write_jpeg(image, target, quality)
             images.append(PageImage(number, target, *image.size))
     return images
+
+
+def preview_page(
+    pdf_path: Path,
+    page_number: int,
+    out_dir: Path,
+    max_edge: int = MAX_EDGE,
+    quality: int = QUALITY,
+) -> PageImage:
+    """Render one stored PDF page for the source viewer.
+
+    The viewer gets its own cache directory, while the model-input path keeps
+    using ``source_inputs`` and its existing raster cache unchanged.
+    """
+    return rasterize(pdf_path, [page_number], out_dir, max_edge=max_edge, quality=quality)[0]

@@ -7,7 +7,7 @@ from typing import Protocol
 
 import httpx
 
-from backend.ingest.pdf import PageImage
+from backend.ingest.pdf import InputImage
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 RETRYABLE = {408, 429, 500, 502, 503, 504}
@@ -40,11 +40,11 @@ class LLM(Protocol):
     ) -> LLMReply: ...
 
 
-def image_part(page: PageImage) -> dict:
-    payload = base64.b64encode(page.path.read_bytes()).decode("ascii")
+def image_part(image: InputImage) -> dict:
+    payload = base64.b64encode(image.path.read_bytes()).decode("ascii")
     return {
         "type": "image_url",
-        "image_url": {"url": f"data:image/jpeg;base64,{payload}"},
+        "image_url": {"url": f"data:{image.media_type};base64,{payload}"},
     }
 
 
@@ -79,6 +79,10 @@ class OpenRouterLLM:
             "messages": list(messages),
             "max_tokens": self._max_output_tokens,
             "reasoning_effort": self._reasoning_effort,
+            "provider": {
+                "only": ["deepseek"],
+                "allow_fallbacks": False,
+            },
         }
         if tools:
             body["tools"] = list(tools)

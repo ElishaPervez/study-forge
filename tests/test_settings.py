@@ -15,7 +15,7 @@ def test_load_settings_reads_key_and_pins_model(tmp_path: Path) -> None:
     settings = load_settings(env_file=env)
 
     assert settings.openrouter_api_key == "sk-test-123"
-    assert settings.model == "deepseek/deepseek-v4.1-flash-20260910"
+    assert settings.model == "deepseek/deepseek-v4.1-flash"
     assert settings.reasoning_effort == "low"
     assert settings.max_output_tokens == 32768
 
@@ -32,7 +32,7 @@ def test_load_settings_ignores_model_and_parameter_overrides(tmp_path: Path) -> 
 
     settings = load_settings(env_file=env)
 
-    assert settings.model == "deepseek/deepseek-v4.1-flash-20260910"
+    assert settings.model == "deepseek/deepseek-v4.1-flash"
     assert settings.reasoning_effort == "low"
     assert settings.max_output_tokens == 32768
 

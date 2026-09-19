@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from backend.fonts.embed import inject_fonts
 from backend.generate.unit import UnitRequest, UnitStatus, generate_unit
 from backend.ingest.pdf import PageImage
@@ -183,6 +185,80 @@ def test_embedded_css_data_urls_are_allowed(tmp_path: Path) -> None:
     written = result.artifact_path.read_text(encoding="utf-8")
     assert "data:font/woff2;base64,abc" in written
     assert "data:image/png;base64,abc" in written
+
+
+@pytest.mark.parametrize(
+    ("candidate", "finding_word"),
+    [
+        (
+            '<img srcset="data:image/png;base64,abc 1x, assets/page.png 2x" alt="page">',
+            "relative",
+        ),
+        (
+            '<img srcset="data:image/png;base64,abc 1x, https://example.com/page.png 2x" alt="page">',
+            "remote",
+        ),
+    ],
+)
+def test_mixed_srcset_candidates_are_sent_to_repair(
+    tmp_path: Path, candidate: str, finding_word: str
+) -> None:
+    invalid = GOOD.replace("<body>", f"<body>{candidate}", 1)
+    llm = ScriptedLLM([LLMReply(text=invalid), LLMReply(text=GOOD)])
+
+    result = generate_unit(
+        _request(tmp_path),
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        out_dir=tmp_path / "out",
+    )
+
+    assert result.calls == 2
+    assert result.status is UnitStatus.OK
+    assert finding_word in llm.seen[1][-1]["content"].lower()
+
+
+@pytest.mark.parametrize(
+    ("kind", "candidate_builder"),
+    [
+        (
+            "relative image source",
+            lambda html: html.replace(
+                "<body>", '<body><img src="assets/page.png" alt="page">', 1
+            ),
+        ),
+        (
+            "relative stylesheet href",
+            lambda html: html.replace(
+                "</head>", '<link rel="stylesheet" href="styles/guide.css"></head>', 1
+            ),
+        ),
+        (
+            "relative CSS URL",
+            lambda html: html.replace(
+                "<style>", "<style>.hero{background-image:url('assets/hero.png')}\n", 1
+            ),
+        ),
+    ],
+)
+def test_relative_asset_references_are_sent_to_repair(
+    tmp_path: Path, kind: str, candidate_builder
+) -> None:
+    candidate = candidate_builder(GOOD)
+    llm = ScriptedLLM([LLMReply(text=candidate), LLMReply(text=GOOD)])
+
+    result = generate_unit(
+        _request(tmp_path),
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        out_dir=tmp_path / "out",
+    )
+
+    assert result.calls == 2, kind
+    assert result.status is UnitStatus.OK
+    assert "relative" in llm.seen[1][-1]["content"].lower()
 
 
 def test_checker_passing_remote_css_is_repaired(tmp_path: Path) -> None:

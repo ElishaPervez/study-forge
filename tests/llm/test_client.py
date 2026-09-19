@@ -5,14 +5,14 @@ from pathlib import Path
 import httpx
 import pytest
 
-from backend.ingest.pdf import PageImage
+from backend.ingest.pdf import InputImage, PageImage
 from backend.llm.client import LLMError, OpenRouterLLM, image_part
 
 
 def _client(handler) -> OpenRouterLLM:
     return OpenRouterLLM(
         api_key="sk-test",
-        model="deepseek/deepseek-v4.1-flash-20260910",
+        model="deepseek/deepseek-v4.1-flash",
         reasoning_effort="low",
         max_output_tokens=32768,
         transport=httpx.MockTransport(handler),
@@ -34,9 +34,13 @@ def test_request_pins_model_params_and_carries_no_remote_url() -> None:
 
     reply = _client(handler).complete([{"role": "user", "content": "hi"}])
 
-    assert captured["model"] == "deepseek/deepseek-v4.1-flash-20260910"
+    assert captured["model"] == "deepseek/deepseek-v4.1-flash"
     assert captured["max_tokens"] == 32768
     assert captured["reasoning_effort"] == "low"
+    assert captured["provider"] == {
+        "only": ["deepseek"],
+        "allow_fallbacks": False,
+    }
     assert captured["messages"] == [{"role": "user", "content": "hi"}]
     assert "tools" not in captured
     assert reply.text == "<html></html>"
@@ -152,3 +156,14 @@ def test_image_part_is_a_base64_jpeg(tmp_path: Path) -> None:
     assert part["image_url"]["url"].startswith("data:image/jpeg;base64,")
     encoded = part["image_url"]["url"].split(",", 1)[1]
     assert base64.b64decode(encoded) == b"\xff\xd8\xff\xe0jpegbytes"
+
+
+def test_image_part_uses_the_input_media_type_and_original_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "source.png"
+    path.write_bytes(b"original png bytes")
+
+    part = image_part(InputImage(1, path, "image/png", "Source image 1"))
+
+    assert part["image_url"]["url"].startswith("data:image/png;base64,")
+    encoded = part["image_url"]["url"].split(",", 1)[1]
+    assert base64.b64decode(encoded) == b"original png bytes"

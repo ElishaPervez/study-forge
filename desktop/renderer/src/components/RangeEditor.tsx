@@ -81,18 +81,12 @@ export function RangeEditor({
     <section className="setup-section" aria-labelledby="ranges-heading">
       <div className="section-heading">
         <div>
-          <p className="section-kicker">Source units</p>
-          <h2 id="ranges-heading">Mark the pages to study</h2>
+          <p className="section-label" id="ranges-heading">Source units</p>
         </div>
         <span className="section-count" aria-label={`${rows.length} unit${rows.length === 1 ? "" : "s"}`}>
           {String(rows.length).padStart(2, "0")}
         </span>
       </div>
-
-      <p className="section-help">
-        Give each range a useful name. Pages are counted from the first page of the PDF.
-        {pageCount === null ? " The server will confirm the PDF length when you generate." : ` This PDF has ${pageCount} pages.`}
-      </p>
 
       <div className="range-list">
         {rows.map((row, index) => {
@@ -181,7 +175,7 @@ export function RangeEditor({
       </div>
 
       <button type="button" className="text-button" onClick={onAdd} disabled={disabled}>
-        <span aria-hidden="true">+</span> Add another unit
+        <span aria-hidden="true">+</span> Add unit
       </button>
     </section>
   );

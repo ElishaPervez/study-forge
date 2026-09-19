@@ -9,4 +9,7 @@ node_modules/
 dist/
 .job-tmp/
 jobs/
+# `backend/jobs/` contains versioned Python source; runtime job data remains ignored.
+!backend/jobs/
+!backend/jobs/*.py
 *.pdf
