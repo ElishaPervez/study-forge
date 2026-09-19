@@ -71,4 +71,25 @@ describe("PdfRangeSelector", () => {
     expect(markup).toContain('aria-label="PDF page range"');
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it("renders the custom dropdown with proper ARIA attributes, chevron, and label link", () => {
+    const markup = renderToStaticMarkup(
+      <PdfRangeSelector
+        pageCount={25}
+        mode="all"
+        start={1}
+        end={25}
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('class="custom-dropdown');
+    expect(markup).toContain('class="custom-dropdown-trigger');
+    expect(markup).toContain('role="combobox"');
+    expect(markup).toContain('aria-haspopup="listbox"');
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain('id="pdf-selection-mode"');
+    expect(markup).toContain('for="pdf-selection-mode"');
+    expect(markup).toContain('class="custom-dropdown-chevron"');
+  });
 });

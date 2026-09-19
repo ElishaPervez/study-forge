@@ -1,5 +1,7 @@
 import { memo, type ChangeEvent } from "react";
 
+import { CustomDropdown, type DropdownOption } from "./CustomDropdown";
+
 export type PdfSelectionMode = "all" | "custom";
 
 export interface PdfAllSelection {
@@ -59,6 +61,19 @@ function emitCustom(
   onChange(clampPdfSelection({ mode: "custom", start, end }, pageCount));
 }
 
+const PDF_MODE_OPTIONS: readonly DropdownOption<PdfSelectionMode>[] = [
+  {
+    value: "all",
+    label: "Entire document",
+    hint: "Process all pages in document",
+  },
+  {
+    value: "custom",
+    label: "Custom range",
+    hint: "Specify start and end pages",
+  },
+];
+
 export const PdfRangeSelector = memo(function PdfRangeSelector({
   pageCount,
   mode,
@@ -67,8 +82,8 @@ export const PdfRangeSelector = memo(function PdfRangeSelector({
   disabled = false,
   onChange,
 }: PdfRangeSelectorProps) {
-  const handleModeChange = (event: ChangeEvent<HTMLSelectElement>) => {
-    if (event.target.value === "all") {
+  const handleModeChange = (newMode: PdfSelectionMode) => {
+    if (newMode === "all") {
       onChange({ mode: "all" });
       return;
     }
@@ -95,17 +110,22 @@ export const PdfRangeSelector = memo(function PdfRangeSelector({
         {limit !== null ? <span className="section-count">{limit} pages</span> : null}
       </div>
 
-      <label className="selection-label" htmlFor="pdf-selection-mode">Selection</label>
-      <select
+      <label
+        className="selection-label"
+        id="pdf-selection-mode-label"
+        htmlFor="pdf-selection-mode"
+      >
+        Selection
+      </label>
+      <CustomDropdown<PdfSelectionMode>
         id="pdf-selection-mode"
+        labelId="pdf-selection-mode-label"
         name="pdf-selection-mode"
         value={mode}
-        onChange={handleModeChange}
+        options={PDF_MODE_OPTIONS}
         disabled={disabled}
-      >
-        <option value="all">Entire document</option>
-        <option value="custom">Custom range</option>
-      </select>
+        onChange={handleModeChange}
+      />
 
       {mode === "custom" ? (
         <div className="pdf-range-fields" aria-label="PDF page range">

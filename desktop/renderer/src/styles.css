@@ -531,11 +531,13 @@ h3 {
   line-height: 1.4;
 }
 
-.selection-label,
-.pdf-selection select {
+.selection-label {
+  display: block;
+  margin-bottom: 5px;
   color: var(--muted);
   font-family: "Geist Mono", monospace;
   font-size: 0.58rem;
+  letter-spacing: 0.02em;
 }
 
 .pdf-selection select {
@@ -553,6 +555,226 @@ h3 {
   border-color: var(--accent);
   outline: 2px solid var(--accent-line);
   outline-offset: 1px;
+}
+
+/* Custom Dropdown for PDF Selection */
+.custom-dropdown {
+  position: relative;
+  width: 100%;
+}
+
+.custom-dropdown-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--base);
+  color: var(--ink);
+  font-family: Geist, "Segoe UI", sans-serif;
+  font-size: 0.69rem;
+  font-weight: 500;
+  text-align: left;
+  line-height: 1.35;
+  cursor: pointer;
+  user-select: none;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+  -webkit-font-smoothing: subpixel-antialiased;
+  transition: border-color 0.18s cubic-bezier(0.2, 0, 0, 1),
+              background-color 0.18s cubic-bezier(0.2, 0, 0, 1),
+              box-shadow 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.custom-dropdown-trigger:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+
+.custom-dropdown-trigger:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.custom-dropdown-trigger.is-open {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+}
+
+.custom-dropdown-trigger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--field);
+  border-color: var(--border);
+  color: var(--disabled);
+}
+
+.custom-dropdown-trigger-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-dropdown-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  margin-left: 8px;
+  color: var(--muted);
+  transform-origin: center;
+  transition: transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1), color 0.18s ease;
+}
+
+.custom-dropdown-trigger:hover:not(:disabled) .custom-dropdown-chevron {
+  color: var(--ink);
+}
+
+.custom-dropdown-trigger.is-open .custom-dropdown-chevron {
+  transform: rotate(180deg);
+  color: var(--accent);
+}
+
+/* Custom dropdown popup menu - crisp static state by default */
+.custom-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px -4px rgba(16, 24, 40, 0.14),
+              0 4px 10px -2px rgba(16, 24, 40, 0.06),
+              0 0 0 1px rgba(16, 24, 40, 0.04);
+  transform-origin: top center;
+  /* Ensure clean, unpromoted, non-transformed layer in settled state for pixel-sharp text */
+  transform: none;
+  will-change: auto;
+  -webkit-font-smoothing: subpixel-antialiased;
+}
+
+/* Smooth reveal animation while opening - layer promoted only during transition */
+.custom-dropdown-menu.is-opening {
+  animation: dropdownReveal 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, opacity;
+}
+
+/* Smooth dismiss animation while closing */
+.custom-dropdown-menu.is-closing {
+  animation: dropdownDismiss 0.14s cubic-bezier(0.4, 0, 1, 1) forwards;
+  will-change: transform, opacity;
+}
+
+@keyframes dropdownReveal {
+  0% {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes dropdownDismiss {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+.custom-dropdown-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 5px;
+  color: var(--ink);
+  font-family: Geist, "Segoe UI", sans-serif;
+  font-size: 0.69rem;
+  line-height: 1.35;
+  cursor: pointer;
+  user-select: none;
+  -webkit-font-smoothing: subpixel-antialiased;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.custom-dropdown-option:hover,
+.custom-dropdown-option.is-focused {
+  background: var(--accent-wash);
+  color: var(--accent-hover);
+}
+
+.custom-dropdown-option.is-selected {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.custom-dropdown-option.is-selected:not(.is-focused):not(:hover) {
+  background: rgba(238, 242, 255, 0.45);
+}
+
+.custom-dropdown-option-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.custom-dropdown-option-title {
+  font-size: 0.69rem;
+  font-weight: inherit;
+}
+
+.custom-dropdown-option-hint {
+  font-family: "Geist Mono", monospace;
+  font-size: 0.54rem;
+  color: var(--muted);
+  line-height: 1.25;
+  -webkit-font-smoothing: subpixel-antialiased;
+}
+
+.custom-dropdown-option.is-focused .custom-dropdown-option-hint,
+.custom-dropdown-option:hover .custom-dropdown-option-hint {
+  color: var(--accent);
+}
+
+.custom-dropdown-option-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+  animation: checkmarkPop 0.16s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transform: none;
+}
+
+@keyframes checkmarkPop {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .pdf-range-fields {
