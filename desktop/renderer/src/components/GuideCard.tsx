@@ -35,15 +35,6 @@ export function selectionRectInViewer(
   };
 }
 
-function statusLabel(status: string): string {
-  if (status === "ok") return "Guide ready";
-  if (status === "failed") return "Generation failed";
-  if (status === "running") return "Generating guide";
-  if (status === "pending") return "Guide queued";
-  if (status === "needs-attention") return "Needs attention";
-  return status;
-}
-
 function statusTone(status: string): string {
   if (status === "ok") return "success";
   if (status === "failed") return "failure";
@@ -256,23 +247,12 @@ export const GuideCard = memo(function GuideCard({
 
   return (
     <section className={`guide-card tone-${tone}`} aria-label={`Study guide: ${guide.name}`}>
-      <header className="guide-card-header">
-        <div className="guide-card-heading">
-          <p className="section-label">Study guide</p>
-          <h3>{guide.name}</h3>
-        </div>
-        <div className={`status-pill status-${tone}`} aria-label={`Status: ${statusLabel(guide.status)}`}>
-          <span className="status-dot" aria-hidden="true" />
-          {statusLabel(guide.status)}
-        </div>
-      </header>
-
       <div className="guide-card-body">
-        <p className="guide-card-message">
-          {guide.status === "ok"
-            ? "The guide was generated and saved locally."
-            : displayedError ?? "The guide is still being prepared."}
-        </p>
+        {guide.status === "ok" ? null : (
+          <p className="guide-card-message">
+            {displayedError ?? "The guide is still being prepared."}
+          </p>
+        )}
 
         {displayedFindings.length > 0 ? (
           <div className="finding-block">
@@ -289,10 +269,6 @@ export const GuideCard = memo(function GuideCard({
             ref={previewRef}
             aria-busy={revisionBusy}
           >
-            <div className="preview-heading">
-              <span>Preview</span>
-              <span className="preview-note">Saved artifact</span>
-            </div>
             <div className="artifact-frame-shell">
               <iframe
                 key={`${guide.guide_id}-${guide.revision_count}`}

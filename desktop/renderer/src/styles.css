@@ -1340,7 +1340,7 @@ h3 {
 .viewer-toolbar {
   display: flex;
   flex: none;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
   gap: 16px;
   min-height: 42px;
@@ -1358,9 +1358,31 @@ h3 {
 
 .viewer-tabs {
   display: flex;
+  flex: none;
   align-items: stretch;
   gap: 3px;
-  height: 42px;
+}
+
+.viewer-toolbar-guide {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  margin-left: 2px;
+  padding: 9px 0 9px 16px;
+  border-left: 1.5px solid var(--border);
+}
+
+.viewer-toolbar-title {
+  overflow: hidden;
+  font-family: "Instrument Serif", Georgia, serif;
+  font-size: clamp(1.15rem, 2vw, 1.5rem);
+  font-weight: 400;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .viewer-tab {
@@ -1415,6 +1437,13 @@ h3 {
   scrollbar-width: thin;
 }
 
+/* The guide fills the viewer instead of sitting inside a card. */
+.viewer-scroll.is-guide-view {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
 .viewer-heading-row {
   display: flex;
   align-items: flex-end;
@@ -1442,42 +1471,12 @@ h3 {
 
 .source-viewer {
   min-width: 0;
-  margin-top: 26px;
-}
-
-.source-viewer-heading {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 18px;
-  padding-bottom: 12px;
-  border-bottom: 1.5px solid var(--border-strong);
-}
-
-.source-viewer-heading h3 {
-  max-width: 32rem;
-  margin-top: 7px;
-  overflow: hidden;
-  font-family: "Instrument Serif", Georgia, serif;
-  font-size: clamp(1.35rem, 2.5vw, 2rem);
-  font-weight: 400;
-  line-height: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.source-viewer-count {
-  flex: none;
-  color: var(--muted);
-  font-family: "Geist Mono", monospace;
-  font-size: 0.58rem;
 }
 
 .source-page-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 14px;
-  margin-top: 18px;
   contain: layout style;
 }
 
@@ -1623,53 +1622,41 @@ h3 {
 }
 
 .guide-card {
-  min-width: 0;
-  margin-top: 28px;
-  border: 1.5px solid var(--border);
-  background: var(--base);
-}
-
-.guide-card-header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 18px;
-  border-bottom: 1.5px solid var(--border);
-}
-
-.guide-card-heading {
+  flex: 1;
+  flex-direction: column;
   min-width: 0;
-}
-
-.guide-card-heading h3 {
-  margin-top: 7px;
-  overflow: hidden;
-  font-family: "Instrument Serif", Georgia, serif;
-  font-size: clamp(1.6rem, 3vw, 2.4rem);
-  font-weight: 400;
-  line-height: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-height: 0;
 }
 
 .guide-card-body {
-  display: grid;
-  gap: 16px;
-  padding: 18px;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
 }
 
 .guide-card-message {
-  max-width: 36rem;
+  flex: none;
+  padding: 14px 20px 0;
   color: var(--muted);
   font-size: 0.74rem;
   line-height: 1.5;
 }
 
+.guide-card-body .finding-block {
+  flex: none;
+  padding: 0 20px 14px;
+}
+
 .guide-card-preview {
   position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   min-width: 0;
-  padding-top: 2px;
+  min-height: 0;
 }
 
 .revision-popup {
@@ -1793,7 +1780,7 @@ h3 {
 .revision-busy-overlay {
   position: absolute;
   z-index: 7;
-  inset: 42px 12px 12px;
+  inset: 0;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -2068,6 +2055,17 @@ h3 {
 
 .artifact-frame-shell {
   position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.guide-card-preview .artifact-frame {
+  flex: 1;
+  height: auto;
+  min-height: 220px;
+  border: 0;
 }
 
 .artifact-frame-state {

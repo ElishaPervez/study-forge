@@ -114,12 +114,6 @@ function isInRange(selection: GuideSelection, pageNumber: number): boolean {
     && pageNumber <= selection.end;
 }
 
-function previewLabel(source: SourceDraft): string {
-  return source.kind === "pdf"
-    ? `${source.pageCount ?? 0} pages`
-    : `${source.imageFiles.length} ${source.imageFiles.length === 1 ? "image" : "images"}`;
-}
-
 function imageAlt(file: ImageFile, ordinal: number): string {
   return `Image ${ordinal}: ${file.name}`;
 }
@@ -235,14 +229,6 @@ export const SourceViewer = memo(function SourceViewer({
 
   return (
     <section className="source-viewer" aria-label="Source viewer" onClick={() => setContextMenu(null)}>
-      <div className="source-viewer-heading">
-        <div>
-          <p className="section-label">Source</p>
-          <h3>{source.displayName}</h3>
-        </div>
-        <span className="source-viewer-count">{previewLabel(source)}</span>
-      </div>
-
       {source.kind === "pdf" ? (
         <div className="source-page-grid">
           {Array.from({ length: source.pageCount ?? 0 }, (_, index) => {

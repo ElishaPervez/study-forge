@@ -14,6 +14,7 @@ import {
   exportFilename,
   exportGuideArtifact,
   ExportAction,
+  GuideToolbarHeading,
   mergeGuideResponse,
   replaceGuideInHistory,
   sourcePathsForForge,
@@ -443,7 +444,7 @@ describe("Study Forge visual availability markers", () => {
     expect(stillUnavailable.source_error).toBe(unavailable.source_error);
   });
 
-  it("shows the saved guide name, status, and current artifact preview together", () => {
+  it("renders the saved guide artifact preview inside the guide card", () => {
     const guide: GuideView = {
       guide_id: "guide-1",
       source_id: "source-1",
@@ -462,11 +463,21 @@ describe("Study Forge visual availability markers", () => {
       <GuideCard guide={guide} baseUrl="http://127.0.0.1:53124" />,
     );
 
-    expect(markup).toContain("Saved guide");
-    expect(markup).toContain("Guide ready");
+    expect(markup).toContain("Study guide: Saved guide");
+    expect(markup).not.toContain("status-pill");
     expect(markup).toMatch(/srcdoc=/i);
     expect(markup).not.toContain('src="http://127.0.0.1:53124/api/guides/guide-1/artifact.html"');
     expect(markup).toContain("Loading saved guide preview");
+  });
+
+  it("carries the guide name and status labels in the viewer toolbar heading", () => {
+    const markup = renderToStaticMarkup(<GuideToolbarHeading name="Saved guide" />);
+
+    expect(markup).toContain('class="viewer-toolbar-guide"');
+    expect(markup).toContain('class="section-label">Study guide');
+    expect(markup).toContain('id="viewer-heading"');
+    expect(markup).toContain('class="viewer-toolbar-title"');
+    expect(markup).toContain("Saved guide");
   });
 
   it("keeps parser diagnostics out of the visible source recovery message", () => {

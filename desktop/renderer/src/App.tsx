@@ -378,6 +378,17 @@ export function ViewerTabs({
   );
 }
 
+export function GuideToolbarHeading({ name }: { name: string }) {
+  return (
+    <div className="viewer-toolbar-guide">
+      <p className="section-label">Study guide</p>
+      <h2 id="viewer-heading" className="viewer-toolbar-title" title={name}>
+        {name}
+      </h2>
+    </div>
+  );
+}
+
 export function SourceRemoveAction({
   onClick = () => undefined,
   disabled = false,
@@ -1153,15 +1164,10 @@ export function App() {
     );
   }
 
-  const viewerMessage = activeTab === "source"
-    ? source === null
-      ? "Choose one PDF or an ordered image group to begin."
-      : "Review the source pages and adjust the range before forging."
-    : guide === null
-      ? "Forge one guide to see it here."
-      : guide.status === "ok"
-        ? "The guide was generated and saved locally."
-        : guide.error ?? "The guide is still being prepared.";
+  const viewingGuide = activeTab === "guide" && guide !== null;
+  const viewerMessage = guide === null
+    ? "Forge one guide to see it here."
+    : guide.error ?? "The guide is still being prepared.";
 
   return (
     <section className="app-shell" aria-label="Study Forge desktop workspace">
@@ -1243,7 +1249,7 @@ export function App() {
           </div>
         </aside>
 
-        <main className="main-column" aria-labelledby="viewer-heading">
+        <main className="main-column" aria-label={activeTab === "source" ? "Source viewer" : "Study guide viewer"}>
           <section className="viewer-shell" aria-label="Source and guide viewer">
             <header className="viewer-toolbar">
               <ViewerTabs
@@ -1253,6 +1259,7 @@ export function App() {
                 disabled={isBusy}
                 onTabChange={handleTabChange}
               />
+              {viewingGuide ? <GuideToolbarHeading name={guide.name} /> : null}
               <div className="viewer-toolbar-tools">
                 <div className="viewer-status" aria-live="polite">
                   <span className="viewer-status-dot" aria-hidden="true" />
@@ -1261,13 +1268,15 @@ export function App() {
               </div>
             </header>
 
-            <div className="viewer-scroll">
-              <div className="viewer-heading-row">
-                <div>
-                  <h2 id="viewer-heading">{activeTab === "source" ? "Source" : "Study guide"}</h2>
-                  <p className="viewer-summary" aria-live="polite">{viewerMessage}</p>
+            <div className={`viewer-scroll${viewingGuide ? " is-guide-view" : ""}`}>
+              {activeTab === "guide" && !viewingGuide ? (
+                <div className="viewer-heading-row">
+                  <div>
+                    <h2 id="viewer-heading">Study guide</h2>
+                    <p className="viewer-summary" aria-live="polite">{viewerMessage}</p>
+                  </div>
                 </div>
-              </div>
+              ) : null}
 
               {activeTab === "source" && viewerSource !== null ? (
                 <SourceViewer
