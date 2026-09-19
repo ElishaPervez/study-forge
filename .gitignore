@@ -1,6 +1,9 @@
 .worktrees/
 .freebuff/
+# Agent-session notes and repo guidance stay local; they are not published.
+.superpowers/
 /docs/
+AGENTS.md
 .env
 .venv/
 venv/

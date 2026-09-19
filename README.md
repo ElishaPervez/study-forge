@@ -24,7 +24,7 @@ brief) and what comes out (a lesson, a set of materials) — will go here.
 
 ## Contributing
 
-See [AGENTS.md](AGENTS.md) for conventions used in this repository.
+Follow the conventions already established by the code, tests, and toolchain scripts.
 
 ## License
 
