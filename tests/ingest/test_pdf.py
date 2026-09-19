@@ -187,18 +187,58 @@ def test_source_inputs_renders_only_the_requested_inclusive_pdf_pages(
     assert all(item.path.is_file() for item in inputs)
 
 
-def test_source_inputs_preserves_original_image_bytes_and_media_types(tmp_path: Path) -> None:
+def test_source_inputs_normalizes_images_to_bounded_jpegs(tmp_path: Path) -> None:
     png = tmp_path / "first.png"
     webp = tmp_path / "second.webp"
-    png.write_bytes(b"original png bytes")
-    webp.write_bytes(b"original webp bytes")
+    Image.new("RGB", (2000, 1000), (25, 75, 125)).save(png, format="PNG")
+    Image.new("RGB", (800, 600), (100, 150, 200)).save(webp, format="WEBP")
+    original_png = png.read_bytes()
     source = store_source(tmp_path / "jobs", [png, webp], "images")
 
     inputs = source_inputs(source, {"mode": "images"})
 
     assert [item.ordinal for item in inputs] == [1, 2]
-    assert [item.media_type for item in inputs] == ["image/png", "image/webp"]
-    assert [item.path.read_bytes() for item in inputs] == [png.read_bytes(), webp.read_bytes()]
+    assert [item.media_type for item in inputs] == ["image/jpeg", "image/jpeg"]
+    assert [item.source_label for item in inputs] == ["first.png", "second.webp"]
+    for item in inputs:
+        with Image.open(item.path) as image:
+            assert image.format == "JPEG"
+            assert max(image.size) <= MAX_EDGE
+    # Stored originals stay untouched; only the model-facing cache is compressed.
+    assert png.read_bytes() == original_png
+
+
+def test_source_inputs_keep_large_image_groups_under_a_request_budget(tmp_path: Path) -> None:
+    # Camera-sized photos: the 21-image regression exceeded the provider
+    # gateway's request body limit (~96 MB base64). Normalized model inputs
+    # must stay far below it even with base64's 4/3 overhead.
+    photos: list[Path] = []
+    for index in range(21):
+        photo = tmp_path / f"photo-{index:02d}.jpg"
+        Image.new("RGB", (3000, 4000), (20 * index % 255, 80, 160)).save(
+            photo, format="JPEG", quality=95
+        )
+        photos.append(photo)
+    source = store_source(tmp_path / "jobs", photos, "images")
+
+    inputs = source_inputs(source, {"mode": "images"})
+
+    raw_bytes = sum(item.path.stat().st_size for item in inputs)
+    base64_bytes = raw_bytes * 4 // 3
+    assert base64_bytes < 20 * 1024 * 1024
+
+
+def test_source_inputs_reuse_the_normalized_image_cache(tmp_path: Path) -> None:
+    photo = tmp_path / "photo.jpg"
+    Image.new("RGB", (3000, 4000), (50, 100, 150)).save(photo, format="JPEG", quality=95)
+    source = store_source(tmp_path / "jobs", [photo], "images")
+
+    first = source_inputs(source, {"mode": "images"})
+    stamp = first[0].path.stat().st_mtime_ns
+    second = source_inputs(source, {"mode": "images"})
+
+    assert second[0].path == first[0].path
+    assert second[0].path.stat().st_mtime_ns == stamp
 
 
 def test_store_source_rejects_mixed_pdf_and_image_paths(tmp_path: Path, fixture_pdf: Path) -> None:

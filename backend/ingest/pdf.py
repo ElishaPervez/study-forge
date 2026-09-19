@@ -90,6 +90,41 @@ def _write_jpeg(image: Image.Image, target: Path, quality: int) -> None:
                 pass
 
 
+def normalize_image(
+    image_path: Path,
+    ordinal: int,
+    out_dir: Path,
+    max_edge: int = MAX_EDGE,
+    quality: int = QUALITY,
+) -> InputImage:
+    """Prepare one stored image file for the model.
+
+    Image sources are stored as the user's original files, which can be
+    multi-megabyte camera photos; sent inline they overflow the provider
+    gateway's request body limit. Reuse the PDF raster constraints (max edge,
+    JPEG quality) and cache the result next to the source so the tool loop and
+    retries stay cheap.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / f"{ordinal:04d}.jpg"
+    if target.is_file():
+        try:
+            with Image.open(target) as existing:
+                if existing.format == "JPEG" and max(existing.size) <= max_edge:
+                    existing.load()
+                else:
+                    raise ValueError("cached image no longer matches the constraints")
+            return InputImage(ordinal, target, "image/jpeg", image_path.name)
+        except (Image.DecompressionBombError, OSError, SyntaxError, ValueError):
+            pass
+
+    with Image.open(image_path) as opened:
+        image = opened.convert("RGB")
+    image.thumbnail((max_edge, max_edge), Image.LANCZOS)
+    _write_jpeg(image, target, quality)
+    return InputImage(ordinal, target, "image/jpeg", image_path.name)
+
+
 def page_count(pdf_path: Path) -> int:
     with pymupdf.open(pdf_path) as doc:
         return doc.page_count

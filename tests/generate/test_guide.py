@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pymupdf
 import pytest
+from PIL import Image
 
 from backend.generate.guide import GuideRequest, generate_guide
 from backend.generate.revision import RevisionRequest, revise_guide
@@ -24,9 +25,13 @@ class ScriptedLLM:
         return self._replies.pop(0)
 
 
+def _write_image(path: Path) -> None:
+    Image.new("RGB", (8, 8), (25, 75, 125)).save(path, format="PNG")
+
+
 def test_generate_guide_uses_source_selection_and_model_title(tmp_path: Path) -> None:
     image = tmp_path / "lesson.png"
-    image.write_bytes(b"original image bytes")
+    _write_image(image)
     source = store_source(tmp_path / "jobs", [image], "images")
     llm = ScriptedLLM([LLMReply(text=GOOD.replace("<title>Diagram</title>", "<title>Cell Division</title>"))])
 
@@ -41,7 +46,7 @@ def test_generate_guide_uses_source_selection_and_model_title(tmp_path: Path) ->
 
     assert result.name == "Cell Division"
     content = llm.seen[0][1]["content"]
-    assert content[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
     assert "original image bytes" not in content[-1]["text"]
     assert "instruction" not in content[-1]["text"].lower()
 
@@ -76,7 +81,7 @@ def test_generate_guide_accepts_a_selected_pdf_range(tmp_path: Path) -> None:
 
 def test_revise_guide_sends_selected_text_instruction_and_current_html(tmp_path: Path) -> None:
     image = tmp_path / "lesson.png"
-    image.write_bytes(b"original image bytes")
+    _write_image(image)
     source = store_source(tmp_path / "jobs", [image], "images")
     current_html = GOOD
     revised_html = GOOD.replace("<title>Diagram</title>", "<title>Revised lesson</title>")
@@ -124,7 +129,7 @@ def test_revision_repair_prompt_reports_mixed_srcset_candidates(
     tmp_path: Path, bad_candidate: str, finding_word: str
 ) -> None:
     image = tmp_path / "lesson.png"
-    image.write_bytes(b"original image bytes")
+    _write_image(image)
     source = store_source(tmp_path / "jobs", [image], "images")
     invalid = GOOD.replace("<body>", f"<body>{bad_candidate}", 1)
     llm = ScriptedLLM([LLMReply(text=invalid), LLMReply(text=GOOD)])

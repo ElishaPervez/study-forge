@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from backend.ingest.pdf import InputImage, page_count, rasterize
+from backend.ingest.pdf import InputImage, normalize_image, page_count, rasterize
 from backend.jobs.schema import SourceAsset, SourceKind, _validate_stored_name
 from backend.jobs.store import write_atomic
 
@@ -120,8 +120,9 @@ def source_inputs(
 
     if mode != "images":
         raise ValueError("image sources require an images selection")
+    cache_dir = _image_cache_dir(asset, stored_paths[0], root)
     return [
-        InputImage(index, path, _image_media_type(path), path.name)
+        normalize_image(path, index, cache_dir)
         for index, path in enumerate(stored_paths, start=1)
     ]
 
@@ -207,6 +208,17 @@ def _cache_dir(asset: SourceAsset, pdf_path: Path, root: Path | None) -> Path:
     if source_dir is not None:
         return Path(source_dir) / "pages"
     return pdf_path.parent / ".study-forge-pages"
+
+
+def _image_cache_dir(asset: SourceAsset, image_path: Path, root: Path | None) -> Path:
+    source_dir = getattr(asset, "source_dir", None)
+    if root is not None:
+        source_dir = source_dir_for(root, asset.source_id)
+    if source_dir is None:
+        source_dir = getattr(asset, "_source_dir", None)
+    if source_dir is not None:
+        return Path(source_dir) / "model-images"
+    return image_path.parent / ".study-forge-model-images"
 
 
 def _image_media_type(path: Path) -> str:
