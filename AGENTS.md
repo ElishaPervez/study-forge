@@ -10,5 +10,7 @@
 - Never commit student material, extracted text, or generated artifacts.
 - **Remaining undecided:** accounts, packaging, and other product behavior not explicitly decided by the user - ask rather than assume.
 - **Toolchain:** backend tests `uv run pytest -q`; backend lint `uv run ruff check .`; desktop tests `npm test`; desktop build `npm run build` from `desktop`. Use `uv` for Python and `npm` for Node.
+- **Running the desktop app:** build it, then start it detached: `cd desktop && npm run build`, then `powershell -ExecutionPolicy Bypass -File launch-interactive.ps1` (the script waits on Electron, so background it or the call never returns). Stop it with `taskkill //PID <pid> //T //F` on the Electron main process (`tasklist | grep -i electron`); closing the window also stops the backend cleanly.
+- **Guide data is per checkout:** guides and sources live in `<checkout>/jobs`, so an app started from the wrong checkout or worktree shows an empty History. The terminal's cwd is the main checkout, not the active worktree - pass explicit paths.
 - **Git:** do not push, commit, rebase, or alter git config unless explicitly asked.
 - **Subagents:** When launching any subagent through the Codex harness for this repository, always use model `gpt-5.6-luna` at max reasoning effort.
