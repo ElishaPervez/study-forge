@@ -32,6 +32,11 @@ class LLMReply:
     tool_calls: list[ToolCall] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # A reasoning model can spend the whole output budget on hidden reasoning and
+    # return no text at all; the caller needs these to explain that instead of
+    # blaming the artifact it never received.
+    finish_reason: str = ""
+    reasoning_tokens: int = 0
 
 
 class LLM(Protocol):
@@ -56,12 +61,19 @@ class OpenRouterLLM:
         model: str,
         reasoning_effort: str,
         max_output_tokens: int,
+        provider_only: Sequence[str] | None = None,
         transport: httpx.BaseTransport | None = None,
         timeout: float = 600.0,
     ) -> None:
         self._model = model
         self._reasoning_effort = reasoning_effort
         self._max_output_tokens = max_output_tokens
+        # The product pins one model and forbids provider fallback, so the pinned
+        # provider is derived from the model's namespace. Keeping it as a second
+        # hardcoded constant let it go stale silently on a model swap.
+        self._provider_only = (
+            list(provider_only) if provider_only else [model.split("/", 1)[0]]
+        )
         self._client = httpx.Client(
             timeout=timeout,
             transport=transport,
@@ -80,7 +92,7 @@ class OpenRouterLLM:
             "max_tokens": self._max_output_tokens,
             "reasoning_effort": self._reasoning_effort,
             "provider": {
-                "only": ["deepseek"],
+                "only": self._provider_only,
                 "allow_fallbacks": False,
             },
         }
@@ -101,8 +113,10 @@ class OpenRouterLLM:
         payload = response.json()
         if not payload.get("choices"):
             raise LLMError("OpenRouter returned no choices", retryable=False)
-        message = payload["choices"][0].get("message", {})
+        choice = payload["choices"][0]
+        message = choice.get("message", {})
         usage = payload.get("usage", {})
+        token_details = usage.get("completion_tokens_details") or {}
         calls = [
             ToolCall(
                 id=call.get("id", ""),
@@ -116,4 +130,6 @@ class OpenRouterLLM:
             tool_calls=calls,
             prompt_tokens=int(usage.get("prompt_tokens", 0)),
             completion_tokens=int(usage.get("completion_tokens", 0)),
+            finish_reason=str(choice.get("finish_reason") or ""),
+            reasoning_tokens=int(token_details.get("reasoning_tokens", 0) or 0),
         )

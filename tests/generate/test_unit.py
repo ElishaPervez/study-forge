@@ -3,7 +3,13 @@ from pathlib import Path
 import pytest
 
 from backend.fonts.embed import inject_fonts
-from backend.generate.unit import UnitRequest, UnitStatus, generate_unit
+from backend.generate.unit import (
+    MAX_CALLS,
+    MAX_TOOL_TURNS,
+    UnitRequest,
+    UnitStatus,
+    generate_unit,
+)
 from backend.ingest.pdf import PageImage
 from backend.llm.client import LLMError, LLMReply, ToolCall
 from backend.skill.bundle import load_bundle
@@ -112,19 +118,21 @@ def test_never_exceeds_the_call_budget(tmp_path: Path) -> None:
     result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
                            fonts_css="", out_dir=tmp_path / "out")
 
-    assert result.calls <= 3
+    assert result.calls == MAX_TOOL_TURNS
+    assert len(llm.seen) == MAX_TOOL_TURNS
     assert result.status is UnitStatus.NEEDS_ATTENTION
+    assert result.artifact_path is None
+    assert "allowance" in result.findings[0].lower()
 
 
 def test_caller_limit_is_clamped_to_the_global_budget(tmp_path: Path) -> None:
-    tool_call = ToolCall("call_1", "read_reference", '{"name":"type-process.md"}')
-    llm = ScriptedLLM([LLMReply(text="", tool_calls=[tool_call])] * 6)
+    llm = ScriptedLLM([LLMReply(text=BROKEN)] * 6)
 
     result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
                            fonts_css="", out_dir=tmp_path / "out", max_calls=99)
 
-    assert result.calls == 3
-    assert len(llm.seen) == 3
+    assert result.calls <= MAX_CALLS
+    assert len(llm.seen) <= MAX_CALLS
 
 
 def test_transient_retries_consume_the_remaining_call_budget(tmp_path: Path, monkeypatch) -> None:
@@ -412,8 +420,43 @@ def test_checker_passing_script_and_motion_candidate_gets_one_repair(tmp_path: P
     assert "<script" in result.artifact_path.read_text(encoding="utf-8").lower()
 
 
-def test_commentary_outside_html_is_repaired(tmp_path: Path) -> None:
-    candidate = f"Here is the completed lesson:\n{GOOD}\nHope this helps."
+def test_preamble_and_markdown_fence_are_stripped_without_a_repair_call(
+    tmp_path: Path,
+) -> None:
+    candidate = (
+        "Here is the completed lesson:\n"
+        f"```html\n{GOOD.strip()}\n```\n"
+        "Hope this helps."
+    )
+    llm = ScriptedLLM([LLMReply(text=candidate)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.calls == 1
+    assert len(llm.seen) == 1
+    assert result.status is UnitStatus.OK
+    written = result.artifact_path.read_text(encoding="utf-8")
+    assert written == GOOD.strip() + "\n"
+    assert "Here is the completed lesson" not in written
+    assert "Hope this helps" not in written
+    assert written.startswith("<!DOCTYPE html>")
+
+
+def test_leading_whitespace_before_the_doctype_survives(tmp_path: Path) -> None:
+    candidate = f"\n\n  {GOOD.strip()}\n\n"
+    llm = ScriptedLLM([LLMReply(text=candidate)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.calls == 1
+    assert result.status is UnitStatus.OK
+    assert result.artifact_path.read_text(encoding="utf-8") == GOOD.strip() + "\n"
+
+
+def test_fragment_without_a_document_is_still_repaired(tmp_path: Path) -> None:
+    candidate = "Here is the lesson:\n<div><h1>Cell Division</h1></div>"
     llm = ScriptedLLM([LLMReply(text=candidate), LLMReply(text=GOOD)])
 
     result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
@@ -421,10 +464,19 @@ def test_commentary_outside_html_is_repaired(tmp_path: Path) -> None:
 
     assert result.calls == 2
     assert result.status is UnitStatus.OK
-    written = result.artifact_path.read_text(encoding="utf-8")
-    assert written == GOOD.strip() + "\n"
-    assert "Here is the completed lesson" not in written
     assert "outside" in llm.seen[1][-1]["content"].lower()
+
+
+def test_two_concatenated_documents_are_still_refused(tmp_path: Path) -> None:
+    candidate = f"{GOOD.strip()}\n{GOOD.strip()}"
+    llm = ScriptedLLM([LLMReply(text=candidate), LLMReply(text=GOOD)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.calls == 2
+    assert result.status is UnitStatus.OK
+    assert "one complete <html> document" in llm.seen[1][-1]["content"]
 
 
 def test_status_callback_reports_verification_and_repair(tmp_path: Path) -> None:
@@ -437,3 +489,87 @@ def test_status_callback_reports_verification_and_repair(tmp_path: Path) -> None
 
     assert result.status is UnitStatus.OK
     assert events == [UnitStatus.VERIFYING, UnitStatus.REPAIRING, UnitStatus.VERIFYING]
+
+
+def test_empty_completion_is_not_published_as_an_artifact(tmp_path: Path) -> None:
+    llm = ScriptedLLM([LLMReply(text=""), LLMReply(text="   ")])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.status is UnitStatus.NEEDS_ATTENTION
+    assert result.artifact_path is None
+    assert not (tmp_path / "out" / "units" / "unit-1" / "artifact.html").exists()
+    findings = "; ".join(result.findings)
+    assert "no content" in findings.lower()
+    # The empty file must not be blamed on the output policy.
+    assert "one complete <html> document" not in findings
+    assert "accessible (non-aria-hidden) SVG" not in findings
+
+
+def test_empty_completion_is_retried_with_an_explanation(tmp_path: Path) -> None:
+    llm = ScriptedLLM([LLMReply(text=""), LLMReply(text=GOOD)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.status is UnitStatus.OK
+    assert result.calls == 2
+    assert result.artifact_path.is_file()
+    assert "no content" in llm.seen[1][-1]["content"].lower()
+
+
+def test_reasoning_starved_reply_names_the_output_budget_as_the_cause(tmp_path: Path) -> None:
+    starved = LLMReply(text="", finish_reason="length", completion_tokens=32768,
+                       reasoning_tokens=32768)
+    llm = ScriptedLLM([starved, starved])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.status is UnitStatus.NEEDS_ATTENTION
+    assert result.artifact_path is None
+    finding = result.findings[0].lower()
+    assert "output budget" in finding
+    assert "reasoning" in finding
+    assert "32768" in finding
+    assert "one complete <html> document" not in "; ".join(result.findings)
+
+
+def test_truncated_document_is_reported_as_truncation(tmp_path: Path) -> None:
+    truncated = GOOD[: GOOD.index("</body>")]
+    llm = ScriptedLLM([
+        LLMReply(text=truncated, finish_reason="length", completion_tokens=131072,
+                 reasoning_tokens=46000),
+        LLMReply(text=GOOD),
+    ])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.calls == 2
+    assert result.status is UnitStatus.OK
+    repair_prompt = llm.seen[1][-1]["content"]
+    assert "output budget mid-document" in repair_prompt
+    assert "incomplete" in repair_prompt
+    assert "46000" in repair_prompt
+
+
+def test_reference_lookups_do_not_consume_the_generation_attempts(tmp_path: Path) -> None:
+    reads = [
+        LLMReply(
+            text="",
+            tool_calls=[
+                ToolCall(f"call_{index}", "read_reference", '{"name":"type-process.md"}')
+            ],
+        )
+        for index in range(4)
+    ]
+    llm = ScriptedLLM([*reads, LLMReply(text=GOOD)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.status is UnitStatus.OK
+    assert result.calls == 5
+    assert len(result.requested_refs) == 4

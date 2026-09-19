@@ -9,12 +9,13 @@ from backend.ingest.pdf import InputImage, PageImage
 from backend.llm.client import LLMError, OpenRouterLLM, image_part
 
 
-def _client(handler) -> OpenRouterLLM:
+def _client(handler, *, provider_only=None) -> OpenRouterLLM:
     return OpenRouterLLM(
         api_key="sk-test",
-        model="deepseek/deepseek-v4.1-flash",
-        reasoning_effort="low",
-        max_output_tokens=32768,
+        model="meta/muse-spark-1.3-contributor",
+        reasoning_effort="max",
+        max_output_tokens=200000,
+        provider_only=provider_only,
         transport=httpx.MockTransport(handler),
     )
 
@@ -34,11 +35,11 @@ def test_request_pins_model_params_and_carries_no_remote_url() -> None:
 
     reply = _client(handler).complete([{"role": "user", "content": "hi"}])
 
-    assert captured["model"] == "deepseek/deepseek-v4.1-flash"
-    assert captured["max_tokens"] == 32768
-    assert captured["reasoning_effort"] == "low"
+    assert captured["model"] == "meta/muse-spark-1.3-contributor"
+    assert captured["max_tokens"] == 200000
+    assert captured["reasoning_effort"] == "max"
     assert captured["provider"] == {
-        "only": ["deepseek"],
+        "only": ["meta"],
         "allow_fallbacks": False,
     }
     assert captured["messages"] == [{"role": "user", "content": "hi"}]
@@ -47,6 +48,63 @@ def test_request_pins_model_params_and_carries_no_remote_url() -> None:
     assert reply.prompt_tokens == 11
     assert reply.completion_tokens == 7
     assert reply.tool_calls == []
+
+
+def test_provider_follows_the_model_namespace() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "<html></html>"}}]}
+        )
+
+    _client(handler).complete([{"role": "user", "content": "hi"}])
+
+    assert captured["provider"] == {"only": ["meta"], "allow_fallbacks": False}
+
+
+def test_provider_can_be_pinned_explicitly() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "<html></html>"}}]}
+        )
+
+    _client(handler, provider_only=["meta"]).complete(
+        [{"role": "user", "content": "hi"}]
+    )
+
+    assert captured["provider"] == {"only": ["meta"], "allow_fallbacks": False}
+
+
+def test_reasoning_starved_completion_is_surfaced_for_diagnostics() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {"content": None, "reasoning": "thinking"},
+                        "finish_reason": "length",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 13833,
+                    "completion_tokens": 32768,
+                    "completion_tokens_details": {"reasoning_tokens": 32768},
+                },
+            },
+        )
+
+    reply = _client(handler).complete([{"role": "user", "content": "hi"}])
+
+    assert reply.text == ""
+    assert reply.finish_reason == "length"
+    assert reply.completion_tokens == 32768
+    assert reply.reasoning_tokens == 32768
 
 
 def test_tool_calls_are_surfaced(tmp_path: Path) -> None:

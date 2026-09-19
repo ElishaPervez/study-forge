@@ -7,7 +7,7 @@ from PIL import Image
 from backend.generate.guide import GuideRequest, generate_guide
 from backend.generate.revision import RevisionRequest, revise_guide
 from backend.ingest.source import store_source
-from backend.llm.client import LLMReply
+from backend.llm.client import LLMReply, ToolCall
 from backend.skill.bundle import load_bundle
 from backend.verify.self_check import CheckResult
 
@@ -154,3 +154,84 @@ def test_revision_repair_prompt_reports_mixed_srcset_candidates(
     assert result.calls == 2
     assert result.html is not None
     assert finding_word in llm.seen[1][-1]["content"].lower()
+
+
+def _revision_request(source, current_html: str = GOOD) -> RevisionRequest:
+    return RevisionRequest(
+        "guide-5",
+        source,
+        {"mode": "images"},
+        "the selected passage",
+        "Explain the distinction",
+        "custom",
+        current_html,
+    )
+
+
+def _revise(tmp_path: Path, llm) -> object:
+    image = tmp_path / "lesson.png"
+    _write_image(image)
+    source = store_source(tmp_path / "jobs", [image], "images")
+    return revise_guide(
+        _revision_request(source),
+        source_root=tmp_path / "jobs",
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        checker=lambda _path, _skill_dir: CheckResult(True, []),
+    )
+
+
+def test_revision_without_content_names_the_real_cause(tmp_path: Path) -> None:
+    starved = LLMReply(text="", finish_reason="length", completion_tokens=65536,
+                       reasoning_tokens=65536)
+
+    result = _revise(tmp_path, ScriptedLLM([starved, starved]))
+
+    assert result.html is None
+    finding = result.findings[0].lower()
+    assert "output budget" in finding
+    assert "reasoning" in finding
+    assert "one complete <html> document" not in "; ".join(result.findings)
+
+
+def test_revision_without_content_is_retried_with_an_explanation(tmp_path: Path) -> None:
+    llm = ScriptedLLM([LLMReply(text=""), LLMReply(text=GOOD)])
+
+    result = _revise(tmp_path, llm)
+
+    assert result.html is not None
+    assert result.calls == 2
+    assert "no content" in llm.seen[1][-1]["content"].lower()
+
+
+def test_revision_truncation_is_named_in_the_repair_prompt(tmp_path: Path) -> None:
+    truncated = GOOD[: GOOD.index("</body>")]
+    llm = ScriptedLLM([
+        LLMReply(text=truncated, finish_reason="length", completion_tokens=131072),
+        LLMReply(text=GOOD),
+    ])
+
+    result = _revise(tmp_path, llm)
+
+    assert result.html is not None
+    assert "output budget mid-document" in llm.seen[1][-1]["content"]
+
+
+def test_revision_reference_lookups_do_not_consume_the_attempts(tmp_path: Path) -> None:
+    reads = [
+        LLMReply(
+            text="",
+            tool_calls=[
+                ToolCall(f"call_{index}", "read_reference", '{"name":"type-process.md"}')
+            ],
+        )
+        for index in range(4)
+    ]
+    llm = ScriptedLLM([*reads, LLMReply(text=GOOD)])
+
+    result = _revise(tmp_path, llm)
+
+    assert result.html is not None
+    assert result.calls == 5
+    assert len(result.requested_refs) == 4

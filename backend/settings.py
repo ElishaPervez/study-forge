@@ -3,7 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
+DEFAULT_MODEL = "meta/muse-spark-1.3-contributor"
+# This provider exposes max/xhigh/high/medium/low/minimal (default: medium) and
+# marks reasoning mandatory, so "none" is rejected outright.
+DEFAULT_REASONING_EFFORT = "max"
+# Reasoning and visible output share this budget, so it must cover both. The
+# model's own ceiling is 943,718. "max" effort allocates roughly 95% of this
+# budget to reasoning, which is more headroom-hungry than the previous model at
+# "high": there, 46,493 reasoning tokens on a 21-image source truncated a
+# document mid-diagram at a 65,536 cap. A cap is a ceiling, not a charge.
+DEFAULT_MAX_OUTPUT_TOKENS = 200000
 
 
 @dataclass(frozen=True)
@@ -37,8 +46,8 @@ def load_settings(env_file: Path | None = None) -> Settings:
     return Settings(
         openrouter_api_key=api_key,
         model=DEFAULT_MODEL,
-        reasoning_effort="low",
-        max_output_tokens=32768,
+        reasoning_effort=DEFAULT_REASONING_EFFORT,
+        max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
         skill_dir=Path(env.get("SKILL_DIR", "diagram-design")),
         jobs_dir=Path(env.get("JOBS_DIR", "jobs")),
     )

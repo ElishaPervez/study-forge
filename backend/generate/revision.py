@@ -9,11 +9,15 @@ from pathlib import Path
 from backend.fonts.embed import inject_fonts
 from backend.generate.unit import (
     MAX_CALLS,
+    MAX_TOOL_TURNS,
     _backoff_seconds,
+    _empty_reply_finding,
+    _empty_reply_prompt,
     _repair_prompt,
     _resolve_tool_calls,
     _strip_fences,
     _tools,
+    _truncated_reply_finding,
     _v1_output_policy_findings,
 )
 from backend.ingest.source import source_inputs
@@ -77,18 +81,27 @@ def revise_guide(
     requested: list[str] = []
     last_findings: list[str] = []
     repair_used = False
+    attempts = 0
+    tool_turns = 0
 
-    while calls < budget:
+    while attempts < budget:
+        if tool_turns >= MAX_TOOL_TURNS:
+            last_findings = [
+                "reference lookups exhausted their allowance before a revision was written"
+            ]
+            break
         calls += 1
         try:
             reply: LLMReply = llm.complete(messages, tools=_tools(bundle))
         except LLMError as error:
-            if not error.retryable or calls >= budget:
+            attempts += 1
+            if not error.retryable or attempts >= budget:
                 return RevisionResult(None, calls, list(requested), [*last_findings, str(error)])
             time.sleep(_backoff_seconds(calls))
             continue
 
         if reply.tool_calls:
+            tool_turns += 1
             messages.append(
                 {
                     "role": "assistant",
@@ -106,13 +119,26 @@ def revise_guide(
             messages.extend(_resolve_tool_calls(reply.tool_calls, bundle, requested))
             continue
 
+        attempts += 1
+        if not (reply.text or "").strip():
+            # An empty reply is not a bad revision, it is no revision at all: saying
+            # so beats reporting the output policy against a document never written.
+            last_findings = [_empty_reply_finding(reply)]
+            if repair_used or attempts >= budget:
+                return RevisionResult(None, calls, list(requested), last_findings)
+            repair_used = True
+            messages.append({"role": "user", "content": _empty_reply_prompt(last_findings[0])})
+            continue
+
         candidate = inject_fonts(_strip_fences(reply.text or ""), fonts_css)
         findings = _validated_findings(candidate, bundle.skill_dir, checker)
         if not findings:
             return RevisionResult(candidate, calls, list(requested), [])
 
+        if reply.finish_reason == "length":
+            findings.append(_truncated_reply_finding(reply))
         last_findings = findings
-        if repair_used or calls >= budget:
+        if repair_used or attempts >= budget:
             return RevisionResult(None, calls, list(requested), last_findings)
 
         repair_used = True

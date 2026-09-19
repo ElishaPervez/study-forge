@@ -21,6 +21,9 @@ from backend.skill.manifest import get_reference
 from backend.verify.self_check import CheckResult, run_self_check
 
 MAX_CALLS = 3
+# Reference lookups are not generation attempts. Sharing one budget let the model
+# spend every call reading references and never get to write, or repair, an artifact.
+MAX_TOOL_TURNS = 6
 RETRY_BACKOFF_BASE_SECONDS = 0.1
 RETRY_BACKOFF_MAX_SECONDS = 1.0
 V1_MOTION_ATTRIBUTES = {
@@ -364,8 +367,42 @@ def _resolve_tool_calls(
     return results
 
 
+_DOCTYPE_RE = re.compile(r"<!doctype[^>]*>", re.IGNORECASE)
+_HTML_OPEN_RE = re.compile(r"<html[\s>]", re.IGNORECASE)
+_HTML_CLOSE_RE = re.compile(r"</html\s*>", re.IGNORECASE)
+
+
+def _document_span(text: str) -> str | None:
+    """Slice out the document itself, ignoring anything around it."""
+    opening = _HTML_OPEN_RE.search(text)
+    if opening is None:
+        return None
+    closing = None
+    for match in _HTML_CLOSE_RE.finditer(text):
+        closing = match
+    if closing is None or closing.end() <= opening.start():
+        return None
+
+    start = opening.start()
+    doctype = None
+    for match in _DOCTYPE_RE.finditer(text, 0, opening.start()):
+        doctype = match
+    if doctype is not None and not text[doctype.end() : opening.start()].strip():
+        start = doctype.start()
+    return text[start : closing.end()]
+
+
 def _strip_fences(text: str) -> str:
+    """Return the document itself from a reply that may add commentary or a fence.
+
+    The model likes to introduce its answer ("Here is the guide:") and wrap the
+    document in a markdown fence. The output policy rejects text outside the
+    document, so leaving that in spends a whole repair call deleting it.
+    """
     stripped = text.strip()
+    document = _document_span(stripped)
+    if document is not None:
+        return document.strip() + "\n"
     if stripped.startswith("```"):
         lines = stripped.splitlines()[1:]
         if lines and lines[-1].strip().startswith("```"):
@@ -397,6 +434,35 @@ def _write_atomic(path: Path, text: str) -> None:
                 temporary_path.unlink()
             except FileNotFoundError:
                 pass
+
+
+def _empty_reply_finding(reply: LLMReply) -> str:
+    """Explain a completion that carried no text, instead of blaming an artifact."""
+    if reply.finish_reason == "length":
+        return (
+            "model exhausted its output budget before writing any HTML "
+            f"(finish_reason=length, reasoning_tokens={reply.reasoning_tokens} of "
+            f"{reply.completion_tokens} completion tokens)"
+        )
+    return f"model returned no content (finish_reason={reply.finish_reason or 'unknown'})"
+
+
+def _truncated_reply_finding(reply: LLMReply) -> str:
+    """Say a document was cut short, so an incomplete artifact is not mistaken for a bad one."""
+    return (
+        "model stopped at the output budget mid-document, so the artifact is incomplete "
+        f"(finish_reason=length, {reply.completion_tokens} completion tokens, "
+        f"{reply.reasoning_tokens} of them reasoning)"
+    )
+
+
+def _empty_reply_prompt(finding: str) -> str:
+    return (
+        "Your previous reply contained no HTML at all, so there was nothing to verify:\n"
+        f"- {finding}\n\n"
+        "Answer with the complete HTML document itself. Preserve the offline and "
+        "accessible SVG requirements from the original request."
+    )
 
 
 def _repair_prompt(findings: Sequence[str]) -> str:
@@ -467,14 +533,22 @@ def generate_unit(
         {"role": "user", "content": content},
     ]
     repair_used = False
+    attempts = 0
+    tool_turns = 0
 
-    while calls < budget:
+    while attempts < budget:
+        if tool_turns >= MAX_TOOL_TURNS:
+            last_findings = [
+                "reference lookups exhausted their allowance before any HTML was written"
+            ]
+            break
         calls += 1
         try:
             reply: LLMReply = llm.complete(messages, tools=_tools(bundle))
         except LLMError as error:
+            attempts += 1
             error_finding = str(error)
-            if not error.retryable or calls >= budget:
+            if not error.retryable or attempts >= budget:
                 findings = [*last_findings, error_finding]
                 return _failed_result(
                     UnitStatus.FAILED,
@@ -488,6 +562,7 @@ def generate_unit(
             continue
 
         if reply.tool_calls:
+            tool_turns += 1
             messages.append(
                 {
                     "role": "assistant",
@@ -505,6 +580,26 @@ def generate_unit(
             messages.extend(_resolve_tool_calls(reply.tool_calls, bundle, requested))
             continue
 
+        attempts += 1
+        if not (reply.text or "").strip():
+            # No text is not an artifact: publishing "\n" here produced a one-byte
+            # file whose empty contents were then reported as policy violations.
+            last_findings = [_empty_reply_finding(reply)]
+            if repair_used or attempts >= budget:
+                return _failed_result(
+                    UnitStatus.NEEDS_ATTENTION,
+                    calls,
+                    requested,
+                    artifact_path,
+                    published,
+                    last_findings,
+                )
+            repair_used = True
+            messages.append({"role": "user", "content": _empty_reply_prompt(last_findings[0])})
+            if status_callback is not None:
+                status_callback(UnitStatus.REPAIRING)
+            continue
+
         html = inject_fonts(_strip_fences(reply.text or ""), fonts_css)
         _write_atomic(artifact_path, html)
         published = True
@@ -512,12 +607,14 @@ def generate_unit(
             status_callback(UnitStatus.VERIFYING)
         policy_findings = _v1_output_policy_findings(html)
         result = checker(artifact_path, bundle.skill_dir)
-        findings = [*policy_findings, *result.findings]
         if result.ok and not policy_findings:
             return UnitResult(UnitStatus.OK, calls, list(requested), artifact_path, [])
 
+        findings = [*policy_findings, *result.findings]
+        if reply.finish_reason == "length":
+            findings.append(_truncated_reply_finding(reply))
         last_findings = findings or ["v1 output policy or checker rejected artifact"]
-        if repair_used or calls >= budget:
+        if repair_used or attempts >= budget:
             return _failed_result(
                 UnitStatus.NEEDS_ATTENTION,
                 calls,
