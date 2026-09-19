@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useState, type CSSProperties, type MouseEvent } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent } from "react";
+import { createPortal } from "react-dom";
 
 import type { GuideSelection } from "../api";
 import type { PdfSelection } from "./PdfRangeSelector";
@@ -16,10 +17,61 @@ export interface SourceViewerProps {
 export const SOURCE_READ_FAILURE_MESSAGE =
   "The stored source could not be read. Choose a different source in Source.";
 
-interface ContextMenuState {
-  pageNumber: number;
+export interface SourceMenuAnchor {
+  x: number;
+  y: number;
+}
+
+export interface SourceMenuViewport {
+  width: number;
+  height: number;
+}
+
+export interface SourceMenuSize {
+  width: number;
+  height: number;
+}
+
+export interface SourceMenuPlacement extends SourceMenuSize {
   left: number;
   top: number;
+}
+
+export const SOURCE_MENU_EDGE_PADDING = 8;
+const UNMEASURED_SOURCE_MENU_SIZE: SourceMenuSize = { width: 172, height: 72 };
+
+interface ContextMenuState {
+  pageNumber: number;
+  anchor: SourceMenuAnchor;
+  viewport: SourceMenuViewport;
+}
+
+/**
+ * The page menu is painted in a body-level portal so `.main-column`'s paint
+ * containment can neither offset it (it establishes the containing block for
+ * fixed descendants) nor clip it. It is anchored to viewport coordinates, so
+ * keep it at the pointer and slide it back inside the window near an edge.
+ */
+export function placeSourceMenu(
+  anchor: SourceMenuAnchor,
+  viewport: SourceMenuViewport,
+  size: SourceMenuSize = UNMEASURED_SOURCE_MENU_SIZE,
+): SourceMenuPlacement {
+  const width = Math.min(size.width, Math.max(0, viewport.width - SOURCE_MENU_EDGE_PADDING * 2));
+  const height = Math.min(size.height, Math.max(0, viewport.height - SOURCE_MENU_EDGE_PADDING * 2));
+
+  const minLeft = SOURCE_MENU_EDGE_PADDING;
+  const maxLeft = Math.max(minLeft, viewport.width - width - SOURCE_MENU_EDGE_PADDING);
+  const left = Math.min(Math.max(anchor.x, minLeft), maxLeft);
+
+  const minTop = SOURCE_MENU_EDGE_PADDING;
+  const maxTop = Math.max(minTop, viewport.height - height - SOURCE_MENU_EDGE_PADDING);
+  const below = anchor.y;
+  const above = anchor.y - height;
+  const opensBelow = below + height <= viewport.height - SOURCE_MENU_EDGE_PADDING;
+  const top = opensBelow ? below : Math.min(Math.max(above, minTop), maxTop);
+
+  return { left, top, width, height };
 }
 
 export function sourcePreviewUrl(source: SourceDraft, ordinal: number): string {
@@ -194,6 +246,8 @@ export const SourceViewer = memo(function SourceViewer({
   onSourceError,
 }: SourceViewerProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [measuredMenuSize, setMeasuredMenuSize] = useState<SourceMenuSize | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const viewerSelection: GuideSelection = source.kind === "pdf"
     && source.pageCount !== null
     && selection.mode !== "images"
@@ -208,7 +262,11 @@ export const SourceViewer = memo(function SourceViewer({
   const handleContextMenu = useCallback((event: MouseEvent<HTMLElement>, pageNumber: number) => {
     event.preventDefault();
     if (disabled) return;
-    setContextMenu({ pageNumber, left: event.clientX, top: event.clientY });
+    setContextMenu({
+      pageNumber,
+      anchor: { x: event.clientX, y: event.clientY },
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+    });
   }, [disabled]);
 
   const handleEndpoint = useCallback((endpoint: "first" | "last") => {
@@ -223,9 +281,48 @@ export const SourceViewer = memo(function SourceViewer({
     setContextMenu(null);
   }, [contextMenu, onSelectionChange, selection, source.kind, source.pageCount]);
 
-  const menuStyle: CSSProperties | undefined = contextMenu === null
+  useEffect(() => {
+    if (contextMenu === null) return;
+
+    const menu = menuRef.current;
+    if (menu !== null) {
+      const rect = menu.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        setMeasuredMenuSize({ width: rect.width, height: rect.height });
+      }
+    }
+
+    const close = () => setContextMenu(null);
+    const handlePointerDown = (event: PointerEvent) => {
+      if (menuRef.current?.contains(event.target as Node)) return;
+      close();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [contextMenu]);
+
+  const menuPlacement: SourceMenuPlacement | null = contextMenu === null
+    ? null
+    : placeSourceMenu(
+      contextMenu.anchor,
+      contextMenu.viewport,
+      measuredMenuSize ?? UNMEASURED_SOURCE_MENU_SIZE,
+    );
+  const menuStyle: CSSProperties | undefined = menuPlacement === null
     ? undefined
-    : { left: contextMenu.left, top: contextMenu.top };
+    : { left: menuPlacement.left, top: menuPlacement.top };
 
   return (
     <section className="source-viewer" aria-label="Source viewer" onClick={() => setContextMenu(null)}>
@@ -263,22 +360,26 @@ export const SourceViewer = memo(function SourceViewer({
         </div>
       )}
 
-      {contextMenu !== null && source.kind === "pdf" ? (
-        <div
-          className="source-context-menu"
-          role="menu"
-          aria-label={`Page ${contextMenu.pageNumber} actions`}
-          style={menuStyle}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <button type="button" role="menuitem" onClick={() => handleEndpoint("first")}>
-            Set as first page
-          </button>
-          <button type="button" role="menuitem" onClick={() => handleEndpoint("last")}>
-            Set as last page
-          </button>
-        </div>
-      ) : null}
+      {contextMenu !== null && source.kind === "pdf"
+        ? createPortal(
+          <div
+            ref={menuRef}
+            className="source-context-menu"
+            role="menu"
+            aria-label={`Page ${contextMenu.pageNumber} actions`}
+            style={menuStyle}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <button type="button" role="menuitem" onClick={() => handleEndpoint("first")}>
+              Set as first page
+            </button>
+            <button type="button" role="menuitem" onClick={() => handleEndpoint("last")}>
+              Set as last page
+            </button>
+          </div>,
+          document.body,
+        )
+        : null}
     </section>
   );
 });

@@ -4,8 +4,10 @@ import { describe, expect, it } from "vitest";
 import type { GuideSelection } from "../api";
 import {
   SourceViewer,
+  SOURCE_MENU_EDGE_PADDING,
   SOURCE_READ_FAILURE_MESSAGE,
   clampViewerSelection,
+  placeSourceMenu,
   selectionForPageEndpoint,
   setFirstPage,
   setLastPage,
@@ -67,6 +69,62 @@ describe("SourceViewer", () => {
     expect(markup).toContain('data-page-number="3" data-in-range="true"');
     expect(markup).toContain('data-page-number="1" data-in-range="false"');
     expect(markup).toContain('data-page-number="4" data-in-range="false"');
+  });
+
+  it("anchors the page menu to the pointer it was opened at", () => {
+    expect(
+      placeSourceMenu({ x: 420, y: 310 }, { width: 1200, height: 800 }, { width: 164, height: 70 }),
+    ).toEqual({ left: 420, top: 310, width: 164, height: 70 });
+  });
+
+  it("keeps a page menu opened near the right edge inside the window", () => {
+    const placement = placeSourceMenu(
+      { x: 1195, y: 300 },
+      { width: 1200, height: 800 },
+      { width: 164, height: 70 },
+    );
+
+    expect(placement.left).toBe(1200 - 164 - SOURCE_MENU_EDGE_PADDING);
+    expect(placement.left + placement.width).toBeLessThanOrEqual(1200);
+  });
+
+  it("flips a page menu that would overflow the bottom edge above the pointer", () => {
+    const placement = placeSourceMenu(
+      { x: 300, y: 780 },
+      { width: 1200, height: 800 },
+      { width: 164, height: 70 },
+    );
+
+    expect(placement).toEqual({ left: 300, top: 710, width: 164, height: 70 });
+    expect(placement.top + placement.height).toBeLessThanOrEqual(800);
+  });
+
+  it("slides a page menu opened past the bottom edge back into view", () => {
+    const placement = placeSourceMenu(
+      { x: 300, y: 799 },
+      { width: 1200, height: 800 },
+      { width: 164, height: 70 },
+    );
+
+    expect(placement.top + placement.height).toBeLessThanOrEqual(800 - SOURCE_MENU_EDGE_PADDING);
+    expect(placement.left).toBe(300);
+  });
+
+  it("shrinks the page menu instead of letting it overflow a small window", () => {
+    const placement = placeSourceMenu({ x: 5, y: 5 }, { width: 120, height: 60 });
+
+    expect(placement.width).toBe(120 - SOURCE_MENU_EDGE_PADDING * 2);
+    expect(placement.height).toBe(60 - SOURCE_MENU_EDGE_PADDING * 2);
+    expect(placement.left).toBe(SOURCE_MENU_EDGE_PADDING);
+    expect(placement.left + placement.width).toBeLessThanOrEqual(120);
+    expect(placement.top + placement.height).toBeLessThanOrEqual(60);
+  });
+
+  it("keeps the page menu closed until a page is right-clicked", () => {
+    const markup = renderViewer(pdfSource, { mode: "all" });
+
+    expect(markup).not.toContain("source-context-menu");
+    expect(markup).not.toContain("Set as first page");
   });
 
   it("shows ordered original images without PDF page controls", () => {
