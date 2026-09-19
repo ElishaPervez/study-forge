@@ -11,6 +11,11 @@ declare global {
         canceled: boolean;
         path: string | null;
       }>;
+      minimizeWindow: () => Promise<void>;
+      toggleMaximizeWindow: () => Promise<void>;
+      isWindowMaximized: () => Promise<boolean>;
+      closeWindow: () => Promise<void>;
+      onWindowMaximizedChange: (callback: (maximized: boolean) => void) => () => void;
     };
   }
 }

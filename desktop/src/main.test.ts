@@ -8,14 +8,29 @@ const electronFakes = vi.hoisted(() => {
   class FakeBrowserWindow {
     static instances: FakeBrowserWindow[] = [];
     readonly loadFile = vi.fn().mockResolvedValue(undefined);
+    readonly minimize = vi.fn();
+    readonly maximize = vi.fn();
+    readonly unmaximize = vi.fn();
+    readonly close = vi.fn();
+    readonly isMaximized = vi.fn(() => maximizedState.value);
+    readonly isDestroyed = vi.fn(() => false);
+    readonly on = vi.fn((event: string, listener: () => void) => {
+      windowEvents.set(event, listener);
+    });
+    readonly webContents = { send: vi.fn() };
 
     constructor(readonly options: unknown) {
       FakeBrowserWindow.instances.push(this);
     }
   }
 
+  const maximizedState = { value: false };
+  const windowEvents = new Map<string, () => void>();
+
   return {
     handlers,
+    maximizedState,
+    windowEvents,
     BrowserWindow: FakeBrowserWindow,
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       handlers.set(channel, handler);
@@ -73,6 +88,10 @@ function handler(channel: string): (...args: unknown[]) => unknown {
   return registered;
 }
 
+function fakeWindow(): BrowserWindow {
+  return new electronFakes.BrowserWindow({}) as unknown as BrowserWindow;
+}
+
 describe("native Electron bridge handlers", () => {
   beforeEach(() => {
     electronFakes.handlers.clear();
@@ -88,7 +107,7 @@ describe("native Electron bridge handlers", () => {
   });
 
   it("opens one multi-selection PDF/image picker and keeps the backend port handler", async () => {
-    const window = {} as BrowserWindow;
+    const window = fakeWindow();
     electronFakes.showOpenDialog.mockResolvedValue({
       canceled: false,
       filePaths: ["C:/notes/one.pdf", "C:/notes/two.png"],
@@ -115,10 +134,46 @@ describe("native Electron bridge handlers", () => {
     expect(handler("backend:port")({})).toBeNull();
   });
 
+  it("wires window controls to the registered BrowserWindow", async () => {
+    const window = new electronFakes.BrowserWindow({}) as unknown as BrowserWindow & {
+      minimize: ReturnType<typeof vi.fn>;
+      maximize: ReturnType<typeof vi.fn>;
+      unmaximize: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
+      webContents: { send: ReturnType<typeof vi.fn> };
+    };
+    electronFakes.maximizedState.value = false;
+
+    registerNativeBridge(window);
+
+    handler("window:minimize")({});
+    expect(window.minimize).toHaveBeenCalledTimes(1);
+
+    handler("window:maximize-toggle")({});
+    expect(window.maximize).toHaveBeenCalledTimes(1);
+    electronFakes.maximizedState.value = true;
+    handler("window:maximize-toggle")({});
+    expect(window.unmaximize).toHaveBeenCalledTimes(1);
+    expect(handler("window:is-maximized")({})).toBe(true);
+
+    handler("window:close")({});
+    expect(window.close).toHaveBeenCalledTimes(1);
+
+    for (const event of ["maximize", "unmaximize", "restore"]) {
+      const notify = electronFakes.windowEvents.get(event);
+      expect(notify).toBeDefined();
+      notify?.();
+      expect(window.webContents.send).toHaveBeenLastCalledWith(
+        "window:maximized-changed",
+        true,
+      );
+    }
+  });
+
   it("returns an empty source list when the picker is canceled", async () => {
     electronFakes.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
 
-    registerNativeBridge({} as BrowserWindow);
+    registerNativeBridge(fakeWindow());
 
     await expect(handler("source:pick")({})).resolves.toEqual([]);
   });
@@ -130,7 +185,7 @@ describe("native Electron bridge handlers", () => {
     });
     const bytes = new Uint8Array([0, 255, 10, 13, 128]).buffer;
 
-    registerNativeBridge({} as BrowserWindow);
+    registerNativeBridge(fakeWindow());
 
     await expect(handler("artifact:save")({}, "guide.html", bytes)).resolves.toEqual({
       canceled: false,
@@ -149,7 +204,7 @@ describe("native Electron bridge handlers", () => {
   it("does not write when the save dialog is canceled", async () => {
     electronFakes.showSaveDialog.mockResolvedValue({ canceled: true, filePath: "" });
 
-    registerNativeBridge({} as BrowserWindow);
+    registerNativeBridge(fakeWindow());
 
     await expect(handler("artifact:save")({}, "guide.html", new ArrayBuffer(0))).resolves.toEqual({
       canceled: true,
@@ -204,7 +259,7 @@ describe("native Electron bridge handlers", () => {
     });
     processFakes.waitForPort.mockRejectedValueOnce(new Error("backend failed"));
 
-    registerNativeBridge({} as BrowserWindow);
+    registerNativeBridge(fakeWindow());
     let settled = false;
     const attempt = handler("backend:start")({}) as Promise<number>;
     void attempt.then(
@@ -243,7 +298,7 @@ describe("native Electron bridge handlers", () => {
     processFakes.waitForPort
       .mockRejectedValueOnce(new Error("backend failed"))
       .mockResolvedValueOnce(43121);
-    const window = {} as BrowserWindow;
+    const window = fakeWindow();
 
     registerNativeBridge(window);
     registerNativeBridge(window);
@@ -294,7 +349,7 @@ describe("native Electron bridge handlers", () => {
       });
       processFakes.waitForPort.mockRejectedValueOnce(new Error("backend failed"));
 
-      registerNativeBridge({} as BrowserWindow);
+      registerNativeBridge(fakeWindow());
       const attempt = handler("backend:start")({}) as Promise<number>;
       for (
         let index = 0;

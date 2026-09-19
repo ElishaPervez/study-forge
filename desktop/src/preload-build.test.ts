@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 const electronFakes = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn(),
   invoke: vi.fn(),
+  on: vi.fn(),
+  removeListener: vi.fn(),
   getPathForFile: vi.fn(),
 }));
 
@@ -19,6 +21,11 @@ function loadBuiltBridge(): {
   pickSourceFiles: () => Promise<string[]>;
   pathForFile: (file: File) => string;
   saveArtifact: (defaultName: string, bytes: ArrayBuffer) => Promise<unknown>;
+  minimizeWindow: () => Promise<void>;
+  toggleMaximizeWindow: () => Promise<void>;
+  isWindowMaximized: () => Promise<boolean>;
+  closeWindow: () => Promise<void>;
+  onWindowMaximizedChange: (callback: (maximized: boolean) => void) => () => void;
 } {
   const source = readFileSync(preloadPath, "utf8");
   const fakeRequire = (specifier: string): unknown => {
@@ -29,6 +36,8 @@ function loadBuiltBridge(): {
       },
       ipcRenderer: {
         invoke: electronFakes.invoke,
+        on: electronFakes.on,
+        removeListener: electronFakes.removeListener,
       },
       webUtils: {
         getPathForFile: electronFakes.getPathForFile,
@@ -85,5 +94,48 @@ describe("Electron preload build", () => {
     const bytes = new Uint8Array([0, 255, 12]).buffer;
     await bridge.saveArtifact("guide.html", bytes);
     expect(electronFakes.invoke).toHaveBeenLastCalledWith("artifact:save", "guide.html", bytes);
+  });
+
+  it("exposes whitelisted window controls through IPC", async () => {
+    electronFakes.invoke.mockReset();
+    electronFakes.on.mockReset();
+    electronFakes.removeListener.mockReset();
+    const bridge = loadBuiltBridge();
+    expect(bridge).toBeDefined();
+    expect(typeof bridge.minimizeWindow).toBe("function");
+    expect(typeof bridge.toggleMaximizeWindow).toBe("function");
+    expect(typeof bridge.isWindowMaximized).toBe("function");
+    expect(typeof bridge.closeWindow).toBe("function");
+    expect(typeof bridge.onWindowMaximizedChange).toBe("function");
+
+    electronFakes.invoke.mockImplementation((channel: string) =>
+      Promise.resolve(channel === "window:is-maximized" ? true : undefined),
+    );
+    await bridge.minimizeWindow();
+    await bridge.toggleMaximizeWindow();
+    await expect(bridge.isWindowMaximized()).resolves.toBe(true);
+    await bridge.closeWindow();
+    expect(electronFakes.invoke).toHaveBeenNthCalledWith(1, "window:minimize");
+    expect(electronFakes.invoke).toHaveBeenNthCalledWith(2, "window:maximize-toggle");
+    expect(electronFakes.invoke).toHaveBeenNthCalledWith(3, "window:is-maximized");
+    expect(electronFakes.invoke).toHaveBeenNthCalledWith(4, "window:close");
+
+    const seen: boolean[] = [];
+    const unsubscribe = bridge.onWindowMaximizedChange((maximized) => seen.push(maximized));
+    expect(electronFakes.on).toHaveBeenCalledWith(
+      "window:maximized-changed",
+      expect.any(Function),
+    );
+    const listener = electronFakes.on.mock.calls.at(-1)?.[1] as (
+      event: unknown,
+      maximized: boolean,
+    ) => void;
+    listener({}, true);
+    expect(seen).toEqual([true]);
+    unsubscribe();
+    expect(electronFakes.removeListener).toHaveBeenCalledWith(
+      "window:maximized-changed",
+      listener,
+    );
   });
 });

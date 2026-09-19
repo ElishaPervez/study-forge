@@ -137,9 +137,10 @@ h3 {
 .app-nav {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 16px;
   min-width: 0;
-  padding: 0 148px 0 20px;
+  padding: 0 8px 0 20px;
   border-bottom: 1px solid var(--border);
   background: var(--base);
   -webkit-app-region: drag;
@@ -148,6 +149,41 @@ h3 {
 .app-nav-brand {
   flex: none;
   -webkit-app-region: no-drag;
+}
+
+.window-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.window-control {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  -webkit-app-region: no-drag;
+}
+
+.window-control:hover {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.window-control:active {
+  background: var(--field);
+}
+
+.window-control-close:hover {
+  background: #e81123;
+  color: #ffffff;
 }
 
 .app-body {

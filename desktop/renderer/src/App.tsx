@@ -17,6 +17,7 @@ import {
 import { HistoryList } from "./components/HistoryList";
 import { PdfRangeSelector, type PdfSelection } from "./components/PdfRangeSelector";
 import { RevisionPopup } from "./components/RevisionPopup";
+import { WindowControls } from "./components/WindowControls";
 import { SOURCE_READ_FAILURE_MESSAGE, SourceViewer } from "./components/SourceViewer";
 import {
   SourceIntake,
@@ -292,6 +293,7 @@ export function StudyForgeNav() {
         <div className="brand-mark" aria-hidden="true">S</div>
         <span className="brand-name">Study Forge</span>
       </div>
+      <WindowControls />
     </header>
   );
 }

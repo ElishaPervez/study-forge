@@ -593,17 +593,39 @@ describe("Study Forge visual availability markers", () => {
     expect(markup).not.toContain('disabled=""');
   });
 
-  it("uses one branded navigation bar without fake window controls", () => {
+  it("uses one branded navigation bar with real window controls", () => {
     const nav = (AppModule as unknown as { StudyForgeNav?: () => ReactElement }).StudyForgeNav;
 
     expect(nav).toBeDefined();
     if (nav === undefined) return;
 
-    const markup = renderToStaticMarkup(nav());
+    const globalScope = globalThis as { window?: unknown };
+    const originalWindow = globalScope.window;
+    globalScope.window = {
+      lessonGen: {
+        minimizeWindow: vi.fn(),
+        toggleMaximizeWindow: vi.fn(),
+        isWindowMaximized: vi.fn().mockResolvedValue(false),
+        closeWindow: vi.fn(),
+        onWindowMaximizedChange: vi.fn(() => () => undefined),
+      },
+    };
+    try {
+      const markup = renderToStaticMarkup(nav());
 
-    expect(markup).toContain('class="app-nav"');
-    expect(markup).toContain("Study Forge");
-    expect(markup).not.toContain("window-button");
+      expect(markup).toContain('class="app-nav"');
+      expect(markup).toContain("Study Forge");
+      expect(markup).toContain('class="window-controls"');
+      expect(markup).toContain('aria-label="Minimize"');
+      expect(markup).toContain('aria-label="Maximize"');
+      expect(markup).toContain('aria-label="Close"');
+    } finally {
+      if (originalWindow === undefined) {
+        delete globalScope.window;
+      } else {
+        globalScope.window = originalWindow;
+      }
+    }
   });
 
   it("keeps the navigation label focused on Study Forge", () => {

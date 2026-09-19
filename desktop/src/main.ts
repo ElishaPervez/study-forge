@@ -269,6 +269,27 @@ export function registerNativeBridge(window: BrowserWindow): void {
   registeredBridgeWindow = window;
   ipcMain.handle("backend:port", () => backendPort);
   ipcMain.handle("backend:start", () => startBackend());
+  ipcMain.handle("window:minimize", () => {
+    window.minimize();
+  });
+  ipcMain.handle("window:maximize-toggle", () => {
+    if (window.isMaximized()) {
+      window.unmaximize();
+    } else {
+      window.maximize();
+    }
+  });
+  ipcMain.handle("window:is-maximized", () => window.isMaximized());
+  ipcMain.handle("window:close", () => {
+    window.close();
+  });
+  const notifyMaximizedChanged = (): void => {
+    if (window.isDestroyed()) return;
+    window.webContents.send("window:maximized-changed", window.isMaximized());
+  };
+  window.on("maximize", notifyMaximizedChanged);
+  window.on("unmaximize", notifyMaximizedChanged);
+  window.on("restore", notifyMaximizedChanged);
   ipcMain.handle("source:pick", async () => {
     const result = await dialog.showOpenDialog(window, {
       properties: ["openFile", "multiSelections"],
@@ -298,11 +319,6 @@ export async function loadMainWindow(): Promise<BrowserWindow> {
     width: 1280,
     height: 900,
     frame: false,
-    titleBarOverlay: {
-      color: "#ffffff",
-      symbolColor: "#667085",
-      height: 48,
-    },
     webPreferences: {
       preload: path.join(desktopDir, "preload.cjs"),
       contextIsolation: true,
