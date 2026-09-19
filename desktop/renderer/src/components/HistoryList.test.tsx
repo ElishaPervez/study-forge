@@ -63,7 +63,7 @@ describe("HistoryList", () => {
     expect(markup.match(/Pages 2–4/g)).toHaveLength(2);
   });
 
-  it.each(["failed", "needs-attention"])("shows Retry and Delete for a %s guide", (status) => {
+  it.each(["failed", "needs-attention"])("keeps Retry and Delete in a %s guide's context menu", (status) => {
     const failed = guide({
       guide_id: "failed-guide",
       name: "Failed guide",
@@ -82,8 +82,11 @@ describe("HistoryList", () => {
       />,
     );
 
-    expect(markup).toContain(">Retry</button>");
-    expect(markup).toContain(">Delete</button>");
+    expect(markup).toContain('aria-haspopup="menu"');
+    expect(markup).toContain('aria-keyshortcuts="Shift+F10"');
+    expect(markup).toContain('tabindex="0"');
+    expect(markup).not.toContain(">Retry</button>");
+    expect(markup).not.toContain(">Delete</button>");
     expect(markup).not.toContain(">Open</button>");
     expect(markup).not.toContain(">Rename</button>");
   });
@@ -112,9 +115,10 @@ describe("HistoryList", () => {
     expect(markup).toContain("Choose the source again");
     expect(markup).not.toContain(">Open</button>");
     expect(markup).not.toContain(">Retry</button>");
+    expect(markup).not.toContain("aria-haspopup");
   });
 
-  it("shows Open, Rename, and Delete for a successful guide", () => {
+  it("keeps Open, Rename, and Delete in a successful guide's context menu", () => {
     const markup = renderToStaticMarkup(
       <HistoryList
         guides={[guide()]}
@@ -125,10 +129,11 @@ describe("HistoryList", () => {
       />,
     );
 
-    expect(markup).toContain(">Open</button>");
-    expect(markup).toContain(">Rename</button>");
-    expect(markup).toContain(">Delete</button>");
-    expect(markup).not.toContain(">Retry</button>");
+    expect(markup).toContain('aria-haspopup="menu"');
+    expect(markup).toContain('tabindex="0"');
+    expect(markup).not.toContain(">Open</button>");
+    expect(markup).not.toContain(">Rename</button>");
+    expect(markup).not.toContain(">Delete</button>");
   });
 
   it("keeps a guide with an unavailable source readable in history", () => {
@@ -151,7 +156,33 @@ describe("HistoryList", () => {
     expect(markup).toContain("Source unavailable");
     expect(markup).toContain("Choose the source again");
     expect(markup).toContain('role="alert"');
-    expect(markup).toContain(">Retry</button>");
+    expect(markup).toContain('aria-haspopup="menu"');
+  });
+
+  it("offers no context menu while the rail is busy or the guide has nothing to run", () => {
+    const busyMarkup = renderToStaticMarkup(
+      <HistoryList
+        guides={[guide()]}
+        disabled={true}
+        onOpen={() => undefined}
+        onRename={() => undefined}
+        onDelete={() => undefined}
+        onRetry={() => undefined}
+      />,
+    );
+    const runningMarkup = renderToStaticMarkup(
+      <HistoryList
+        guides={[guide({ guide_id: "running-guide", status: "running", artifact_url: null })]}
+        onOpen={() => undefined}
+        onRename={() => undefined}
+        onDelete={() => undefined}
+        onRetry={() => undefined}
+      />,
+    );
+
+    expect(busyMarkup).not.toContain("aria-haspopup");
+    expect(busyMarkup).not.toContain("tabindex");
+    expect(runningMarkup).not.toContain("aria-haspopup");
   });
 
   it("keeps the previous name when the submitted name is empty", () => {

@@ -1,6 +1,24 @@
-import { memo, useState, type KeyboardEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type RefObject,
+} from "react";
 
 import type { GuideSummary, HistoryEntry } from "../api";
+import {
+  HistoryContextMenu,
+  historyMenuEntries,
+  menuViewportFromElement,
+  resolveMenuContainer,
+  type HistoryMenuAction,
+  type MenuAnchor,
+  type MenuViewport,
+} from "./HistoryContextMenu";
 
 export interface HistoryListProps {
   guides: HistoryEntry[];
@@ -10,6 +28,7 @@ export interface HistoryListProps {
   onRename: (guideId: string, name: string) => void | Promise<void>;
   onDelete: (guideId: string) => void | Promise<void>;
   onRetry: (guideId: string) => void | Promise<void>;
+  scrollContainerRef?: RefObject<HTMLElement | null>;
 }
 
 export function sortHistoryNewestFirst(guides: HistoryEntry[]): HistoryEntry[] {
@@ -61,9 +80,17 @@ export const HistoryList = memo(function HistoryList({
   onRename,
   onDelete,
   onRetry,
+  scrollContainerRef,
 }: HistoryListProps) {
   const [editingGuideId, setEditingGuideId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
+  const [menu, setMenu] = useState<{
+    guide: GuideSummary;
+    anchor: MenuAnchor;
+    viewport: MenuViewport;
+  } | null>(null);
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const menuTriggerRef = useRef<HTMLElement | null>(null);
   const orderedGuides = sortHistoryNewestFirst(guides);
 
   const beginRename = (guide: GuideSummary) => {
@@ -95,8 +122,61 @@ export const HistoryList = memo(function HistoryList({
     }
   };
 
+  const closeMenu = useCallback(() => {
+    const trigger = menuTriggerRef.current;
+    menuTriggerRef.current = null;
+    setMenu(null);
+    trigger?.focus();
+  }, []);
+
+  const openMenu = useCallback(
+    (guide: GuideSummary, anchor: MenuAnchor, trigger: HTMLElement) => {
+      const container = resolveMenuContainer(scrollContainerRef?.current, sectionRef.current);
+      if (container === null) return;
+      menuTriggerRef.current = trigger;
+      setMenu({ guide, anchor, viewport: menuViewportFromElement(container) });
+    },
+    [scrollContainerRef],
+  );
+
+  const handleItemContextMenu = (
+    event: MouseEvent<HTMLLIElement>,
+    guide: GuideSummary,
+    canOpenMenu: boolean,
+  ) => {
+    if (!canOpenMenu) return;
+    event.preventDefault();
+    openMenu(guide, { x: event.clientX, y: event.clientY }, event.currentTarget);
+  };
+
+  const handleItemKeyDown = (
+    event: KeyboardEvent<HTMLLIElement>,
+    guide: GuideSummary,
+    canOpenMenu: boolean,
+  ) => {
+    if (!canOpenMenu) return;
+    if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
+    event.preventDefault();
+    const itemRect = event.currentTarget.getBoundingClientRect();
+    openMenu(guide, { x: itemRect.left + 14, y: itemRect.top + 12 }, event.currentTarget);
+  };
+
+  const handleMenuSelect = (action: HistoryMenuAction) => {
+    const opened = menu;
+    closeMenu();
+    if (opened === null) return;
+    if (action === "open") void onOpen(opened.guide);
+    else if (action === "rename") beginRename(opened.guide);
+    else if (action === "delete") void onDelete(opened.guide.guide_id);
+    else void onRetry(opened.guide.guide_id);
+  };
+
+  useEffect(() => {
+    if (disabled && menu !== null) setMenu(null);
+  }, [disabled, menu]);
+
   return (
-    <section className="history-section" aria-labelledby="history-heading">
+    <section className="history-section" ref={sectionRef} aria-labelledby="history-heading">
       <div className="section-heading">
         <p className="section-label" id="history-heading">History</p>
         {orderedGuides.length > 0 ? <span className="section-count">{orderedGuides.length}</span> : null}
@@ -119,13 +199,21 @@ export const HistoryList = memo(function HistoryList({
               );
             }
 
-            const failed = isFailed(guide.status);
             const editing = editingGuideId === guide.guide_id;
+            const menuEntries = editing || disabled ? [] : historyMenuEntries(guide.status);
+            const canOpenMenu = menuEntries.length > 0;
+            const menuOpen = menu?.guide.guide_id === guide.guide_id;
             return (
               <li
-                className={`history-item${activeGuideId === guide.guide_id ? " is-active" : ""}`}
+                className={`history-item${activeGuideId === guide.guide_id ? " is-active" : ""}${menuOpen ? " is-menu-open" : ""}`}
                 key={guide.guide_id}
                 data-guide-id={guide.guide_id}
+                tabIndex={canOpenMenu ? 0 : undefined}
+                aria-haspopup={canOpenMenu ? "menu" : undefined}
+                aria-expanded={canOpenMenu ? menuOpen : undefined}
+                aria-keyshortcuts={canOpenMenu ? "Shift+F10" : undefined}
+                onContextMenu={(event) => handleItemContextMenu(event, guide, canOpenMenu)}
+                onKeyDown={(event) => handleItemKeyDown(event, guide, canOpenMenu)}
               >
                 <div className="history-item-main">
                   {editing ? (
@@ -156,63 +244,22 @@ export const HistoryList = memo(function HistoryList({
                 {guide.source_error ? (
                   <p className="history-item-error" role="alert">{guide.source_error}</p>
                 ) : null}
-
-                <div className="history-actions">
-                  {failed ? (
-                    <>
-                      <button
-                        type="button"
-                        className="history-action history-action-primary"
-                        onClick={() => void onRetry(guide.guide_id)}
-                        disabled={disabled}
-                      >
-                        Retry
-                      </button>
-                      <button
-                        type="button"
-                        className="history-action"
-                        onClick={() => void onDelete(guide.guide_id)}
-                        disabled={disabled}
-                      >
-                        Delete
-                      </button>
-                    </>
-                  ) : guide.status === "ok" ? (
-                    <>
-                      <button
-                        type="button"
-                        className="history-action history-action-primary"
-                        onClick={() => void onOpen(guide)}
-                        disabled={disabled}
-                      >
-                        Open
-                      </button>
-                      {!editing ? (
-                        <button
-                          type="button"
-                          className="history-action"
-                          onClick={() => beginRename(guide)}
-                          disabled={disabled}
-                        >
-                          Rename
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="history-action"
-                        onClick={() => void onDelete(guide.guide_id)}
-                        disabled={disabled || editing}
-                      >
-                        Delete
-                      </button>
-                    </>
-                  ) : null}
-                </div>
               </li>
             );
           })}
         </ol>
       )}
+
+      {menu !== null ? (
+        <HistoryContextMenu
+          guideName={menu.guide.name}
+          entries={historyMenuEntries(menu.guide.status)}
+          anchor={menu.anchor}
+          viewport={menu.viewport}
+          onSelect={handleMenuSelect}
+          onClose={closeMenu}
+        />
+      ) : null}
     </section>
   );
 });

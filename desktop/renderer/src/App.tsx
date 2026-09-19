@@ -580,6 +580,7 @@ export function App() {
   const [startupAttempt, setStartupAttempt] = useState(0);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
   const [isSidebarCompact, setIsSidebarCompact] = useState(false);
+  const railScrollRef = useRef<HTMLDivElement | null>(null);
   const [source, setSource] = useState<SourceDraft | null>(null);
   const [pdfSelection, setPdfSelection] = useState<PdfDraftSelection>({
     mode: "all",
@@ -1183,35 +1184,47 @@ export function App() {
               <p className="rail-context" aria-hidden={isSidebarCompact}>Forge / Current guide</p>
             </div>
             <form className="rail-form" onSubmit={(event) => { event.preventDefault(); void handleForge(); }}>
-              <SourceIntake
-                source={source}
-                disabled={startupState !== "ready"}
-                busy={sourceControlsLocked(workState)}
-                error={sourceError}
-                onPathsSelected={handlePathsSelected}
-                onRemove={handleRemoveSource}
-                onImagesChange={handleImagesChange}
-              />
-
-              {source?.kind === "pdf" ? (
-                <PdfRangeSelector
-                  pageCount={source.pageCount}
-                  mode={pdfSelection.mode}
-                  start={pdfSelection.start}
-                  end={pdfSelection.end}
-                  disabled={isBusy}
-                  onChange={handlePdfSelectionChange}
+              <div className="rail-scroll" ref={railScrollRef}>
+                <SourceIntake
+                  source={source}
+                  disabled={startupState !== "ready"}
+                  busy={sourceControlsLocked(workState)}
+                  error={sourceError}
+                  onPathsSelected={handlePathsSelected}
+                  onRemove={handleRemoveSource}
+                  onImagesChange={handleImagesChange}
                 />
-              ) : null}
 
-              {setupError ? (
-                <div className="setup-error" role="alert">
-                  <strong>{setupErrorTitle}</strong>
-                  <p>{setupError}</p>
-                </div>
-              ) : null}
+                {source?.kind === "pdf" ? (
+                  <PdfRangeSelector
+                    pageCount={source.pageCount}
+                    mode={pdfSelection.mode}
+                    start={pdfSelection.start}
+                    end={pdfSelection.end}
+                    disabled={isBusy}
+                    onChange={handlePdfSelectionChange}
+                  />
+                ) : null}
 
-              <div className="rail-spacer" aria-hidden="true" />
+                {setupError ? (
+                  <div className="setup-error" role="alert">
+                    <strong>{setupErrorTitle}</strong>
+                    <p>{setupError}</p>
+                  </div>
+                ) : null}
+
+                <HistoryList
+                  guides={history}
+                  activeGuideId={guide?.guide_id}
+                  disabled={isBusy}
+                  scrollContainerRef={railScrollRef}
+                  onOpen={handleOpenGuide}
+                  onRename={handleRenameGuide}
+                  onDelete={handleDeleteGuide}
+                  onRetry={handleRetryGuide}
+                />
+                {historyError ? <p className="history-error" role="alert">{historyError}</p> : null}
+              </div>
 
               <div className="action-stack">
                 {workState !== null ? (
@@ -1234,17 +1247,6 @@ export function App() {
                   onClick={() => void handleExport()}
                 />
               </div>
-
-              <HistoryList
-                guides={history}
-                activeGuideId={guide?.guide_id}
-                disabled={isBusy}
-                onOpen={handleOpenGuide}
-                onRename={handleRenameGuide}
-                onDelete={handleDeleteGuide}
-                onRetry={handleRetryGuide}
-              />
-              {historyError ? <p className="history-error" role="alert">{historyError}</p> : null}
             </form>
           </div>
         </aside>

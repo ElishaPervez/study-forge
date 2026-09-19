@@ -42,6 +42,7 @@
   --success: #067647;
   --attention: #b54708;
   --failure: #b42318;
+  --failure-wash: #fef3f2;
   --disabled: #98a2b3;
 }
 
@@ -221,7 +222,7 @@ h3 {
   width: 280px;
   min-width: 280px;
   box-sizing: border-box;
-  padding: 16px 20px 18px;
+  padding: 16px 20px 0;
   overflow: hidden;
 }
 
@@ -326,10 +327,7 @@ h3 {
   flex-direction: column;
   min-height: 0;
   gap: 0;
-  overflow-y: auto;
-  padding-right: 3px;
-  scrollbar-color: var(--border) transparent;
-  scrollbar-width: thin;
+  overflow: hidden;
   transition: opacity 0.15s cubic-bezier(0.2, 0, 0, 1), visibility 0.15s;
 }
 
@@ -1070,17 +1068,27 @@ h3 {
   font-size: 0.6rem;
 }
 
-.rail-spacer {
+.rail-scroll {
+  position: relative;
+  display: flex;
   flex: 1;
-  min-height: 8px;
+  flex-direction: column;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 7px;
+  scrollbar-color: var(--border) transparent;
+  scrollbar-width: thin;
 }
 
 .action-stack {
   display: flex;
+  flex: none;
   flex-direction: column;
   gap: 10px;
-  padding: 16px 0 0;
+  padding: 14px 7px 16px 0;
   border-top: 1.5px solid var(--border-strong);
+  border-bottom: 1.5px solid var(--border-strong);
 }
 
 .work-progress {
@@ -1121,23 +1129,89 @@ h3 {
 }
 
 .history-item {
+  position: relative;
   display: grid;
   gap: 7px;
   min-width: 0;
-  padding: 11px 0 12px;
-  border-top: 1.5px solid var(--border);
+  padding: 11px 10px 12px;
+  border-radius: 7px;
+  transition: background-color 0.22s cubic-bezier(0.2, 0, 0, 1), transform 0.22s cubic-bezier(0.2, 0, 0, 1);
 }
 
-.history-item:first-child {
-  border-top: 0;
+.history-item::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 10px;
+  right: 10px;
+  height: 1.5px;
+  background: var(--border);
+  transition: opacity 0.2s ease;
+}
+
+.history-item::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: 0;
+  width: 2.5px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transform: scaleY(0.25);
+  transition: opacity 0.22s cubic-bezier(0.2, 0, 0, 1), transform 0.26s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.history-item:first-child::before {
+  opacity: 0;
+}
+
+.history-item:hover,
+.history-item:focus-visible,
+.history-item.is-menu-open {
+  background: var(--surface);
+  transform: translateX(3px);
+}
+
+.history-item:hover::before,
+.history-item:focus-visible::before,
+.history-item.is-menu-open::before {
+  opacity: 0;
+}
+
+.history-item:hover::after,
+.history-item:focus-visible::after,
+.history-item.is-menu-open::after {
+  opacity: 1;
+  transform: scaleY(1);
+}
+
+.history-item:hover .history-item-name,
+.history-item:focus-visible .history-item-name {
+  color: var(--accent);
+}
+
+.history-item:hover .history-item-source,
+.history-item:hover .history-item-selection,
+.history-item:focus-visible .history-item-source,
+.history-item:focus-visible .history-item-selection {
+  color: var(--ink);
+  opacity: 0.72;
 }
 
 .history-item.is-active {
-  margin-right: -3px;
-  padding-right: 8px;
-  padding-left: 8px;
-  border-left: 3px solid var(--accent);
   background: var(--accent-wash);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+.history-item.is-active::before {
+  opacity: 0;
+}
+
+.history-item.is-active::after {
+  opacity: 1;
+  transform: scaleY(1);
 }
 
 .history-item-main {
@@ -1159,12 +1233,14 @@ h3 {
   font-family: Geist, "Segoe UI", sans-serif;
   font-size: 0.68rem;
   font-weight: 600;
+  transition: color 0.18s ease;
 }
 
 .history-item-source,
 .history-item-selection {
   color: var(--muted);
   font-size: 0.58rem;
+  transition: color 0.18s ease, opacity 0.18s ease;
 }
 
 .history-item-selection {
@@ -1219,32 +1295,83 @@ h3 {
   line-height: 1.4;
 }
 
-.history-actions {
+.history-menu {
+  position: absolute;
+  z-index: 30;
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  min-width: 148px;
+  padding: 5px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--base);
+  box-shadow: 0 20px 36px -22px rgba(16, 24, 40, 0.55), 0 2px 6px -3px rgba(16, 24, 40, 0.22);
+  animation: historyMenuReveal 0.14s cubic-bezier(0.2, 0, 0, 1);
 }
 
-.history-action {
-  padding: 0;
+@keyframes historyMenuReveal {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.history-menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 7px 9px;
   border: 0;
+  border-radius: 5px;
   background: transparent;
-  color: var(--accent);
-  font-family: "Geist Mono", monospace;
-  font-size: 0.56rem;
-}
-
-.history-action:hover:not(:disabled) {
-  color: var(--accent-hover);
-  text-decoration: underline;
-}
-
-.history-action:disabled {
-  color: var(--disabled);
-}
-
-.history-action-primary {
+  color: var(--ink);
+  font-family: Geist, "Segoe UI", sans-serif;
+  font-size: 0.68rem;
   font-weight: 600;
+  text-align: left;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.history-menu-item:hover {
+  background: var(--surface);
+}
+
+.history-menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.history-menu-item.is-danger {
+  color: var(--failure);
+}
+
+.history-menu-item.is-danger:hover {
+  background: var(--failure-wash);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .history-menu {
+    animation: none;
+  }
+
+  .history-item,
+  .history-item::before,
+  .history-item::after,
+  .history-item-name,
+  .history-item-source,
+  .history-item-selection {
+    transition: none;
+  }
+
+  .history-item:hover,
+  .history-item:focus-visible,
+  .history-item.is-menu-open {
+    transform: none;
+  }
 }
 
 .primary-button {
@@ -2249,14 +2376,6 @@ h3 {
   }
 }
 
-@media (max-height: 740px) and (min-width: 901px) {
-  .rail-inner {
-    overflow-y: auto;
-    scrollbar-color: var(--border) transparent;
-    scrollbar-width: thin;
-  }
-}
-
 @media (max-width: 900px) {
   body {
     overflow: auto;
@@ -2289,12 +2408,9 @@ h3 {
     overflow: visible;
   }
 
-  .rail-form {
+  .rail-form,
+  .rail-scroll {
     overflow: visible;
-  }
-
-  .rail-spacer {
-    display: none;
   }
 
   .main-column {
