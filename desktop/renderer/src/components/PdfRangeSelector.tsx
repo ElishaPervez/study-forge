@@ -1,4 +1,4 @@
-import type { ChangeEvent } from "react";
+import { memo, type ChangeEvent } from "react";
 
 export type PdfSelectionMode = "all" | "custom";
 
@@ -59,7 +59,7 @@ function emitCustom(
   onChange(clampPdfSelection({ mode: "custom", start, end }, pageCount));
 }
 
-export function PdfRangeSelector({
+export const PdfRangeSelector = memo(function PdfRangeSelector({
   pageCount,
   mode,
   start,
@@ -142,4 +142,4 @@ export function PdfRangeSelector({
       ) : null}
     </section>
   );
-}
+});

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { artifactUrl, type GuideView } from "../api";
 import { rectBottom, rectRight, type RevisionBounds, type RevisionRect } from "./RevisionPopup";
@@ -112,7 +112,7 @@ function selectNearestText(document: Document, selectedText: string): boolean {
 
 type ArtifactLoadState = "idle" | "loading" | "ready" | "error";
 
-export function GuideCard({
+export const GuideCard = memo(function GuideCard({
   guide,
   baseUrl,
   onSelection,
@@ -330,4 +330,4 @@ export function GuideCard({
       </div>
     </section>
   );
-}
+});

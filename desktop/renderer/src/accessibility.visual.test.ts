@@ -25,4 +25,10 @@ describe("Study Forge accessibility and compact-window rules", () => {
     expect(css).toContain("grid-template-columns: 1fr");
     expect(css).toContain("@media (max-width: 640px)");
   });
+
+  it("defines fixed-position compact sidebar layout and toggle controls", () => {
+    expect(css).toContain(".app-body.is-rail-compact");
+    expect(css).toContain(".rail-toggle");
+    expect(css).toContain(".rail-header");
+  });
 });

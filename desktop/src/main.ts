@@ -328,6 +328,8 @@ export async function loadMainWindow(): Promise<BrowserWindow> {
 
   registerNativeBridge(window);
   await window.loadFile(path.join(desktopDir, "..", "renderer", "index.html"));
+  window.show?.();
+  window.focus?.();
   return window;
 }
 

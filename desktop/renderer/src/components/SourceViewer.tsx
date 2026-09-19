@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type MouseEvent } from "react";
+import { memo, useCallback, useEffect, useState, type CSSProperties, type MouseEvent } from "react";
 
 import type { GuideSelection } from "../api";
 import type { PdfSelection } from "./PdfRangeSelector";
@@ -124,7 +124,75 @@ function imageAlt(file: ImageFile, ordinal: number): string {
   return `Image ${ordinal}: ${file.name}`;
 }
 
-export function SourceViewer({
+interface PdfPageCardProps {
+  source: SourceDraft;
+  pageNumber: number;
+  inRange: boolean;
+  onContextMenu: (event: MouseEvent<HTMLElement>, pageNumber: number) => void;
+  onSourceError?: (message: string) => void;
+}
+
+const PdfPageCard = memo(function PdfPageCard({
+  source,
+  pageNumber,
+  inRange,
+  onContextMenu,
+  onSourceError,
+}: PdfPageCardProps) {
+  return (
+    <figure
+      className="source-page-card"
+      data-page-number={pageNumber}
+      data-in-range={inRange}
+      onContextMenu={(event) => onContextMenu(event, pageNumber)}
+    >
+      <div className="source-page-image-wrap">
+        <img
+          className="source-page-image"
+          src={sourcePreviewUrl(source, pageNumber)}
+          alt={`Page ${pageNumber}`}
+          loading="lazy"
+          decoding="async"
+          onError={() => onSourceError?.(SOURCE_READ_FAILURE_MESSAGE)}
+        />
+        {inRange ? <span className="source-page-range-marker">In range</span> : null}
+      </div>
+      <figcaption>Page {pageNumber}</figcaption>
+    </figure>
+  );
+});
+
+interface ImagePageCardProps {
+  source: SourceDraft;
+  file: ImageFile;
+  imageNumber: number;
+  onSourceError?: (message: string) => void;
+}
+
+const ImagePageCard = memo(function ImagePageCard({
+  source,
+  file,
+  imageNumber,
+  onSourceError,
+}: ImagePageCardProps) {
+  return (
+    <figure className="source-page-card source-image-card">
+      <div className="source-page-image-wrap">
+        <img
+          className="source-page-image"
+          src={sourcePreviewUrl(source, imageNumber)}
+          alt={imageAlt(file, imageNumber)}
+          loading="lazy"
+          decoding="async"
+          onError={() => onSourceError?.(SOURCE_READ_FAILURE_MESSAGE)}
+        />
+      </div>
+      <figcaption>{imageNumber}. {file.name}</figcaption>
+    </figure>
+  );
+});
+
+export const SourceViewer = memo(function SourceViewer({
   source,
   selection,
   onSelectionChange,
@@ -143,13 +211,13 @@ export function SourceViewer({
     setContextMenu(null);
   }, [resetKey, disabled]);
 
-  const handleContextMenu = (event: MouseEvent<HTMLElement>, pageNumber: number) => {
+  const handleContextMenu = useCallback((event: MouseEvent<HTMLElement>, pageNumber: number) => {
     event.preventDefault();
     if (disabled) return;
     setContextMenu({ pageNumber, left: event.clientX, top: event.clientY });
-  };
+  }, [disabled]);
 
-  const handleEndpoint = (endpoint: "first" | "last") => {
+  const handleEndpoint = useCallback((endpoint: "first" | "last") => {
     if (source.kind !== "pdf" || source.pageCount === null || contextMenu === null) return;
     const next = selectionForPageEndpoint(
       selection,
@@ -159,7 +227,7 @@ export function SourceViewer({
     );
     onSelectionChange(next);
     setContextMenu(null);
-  };
+  }, [contextMenu, onSelectionChange, selection, source.kind, source.pageCount]);
 
   const menuStyle: CSSProperties | undefined = contextMenu === null
     ? undefined
@@ -181,24 +249,14 @@ export function SourceViewer({
             const pageNumber = index + 1;
             const inRange = isInRange(viewerSelection, pageNumber);
             return (
-              <figure
-                className="source-page-card"
+              <PdfPageCard
                 key={pageNumber}
-                data-page-number={pageNumber}
-                data-in-range={inRange}
-                onContextMenu={(event) => handleContextMenu(event, pageNumber)}
-              >
-                <div className="source-page-image-wrap">
-                  <img
-                    className="source-page-image"
-                    src={sourcePreviewUrl(source, pageNumber)}
-                    alt={`Page ${pageNumber}`}
-                    onError={() => onSourceError?.(SOURCE_READ_FAILURE_MESSAGE)}
-                  />
-                  {inRange ? <span className="source-page-range-marker">In range</span> : null}
-                </div>
-                <figcaption>Page {pageNumber}</figcaption>
-              </figure>
+                source={source}
+                pageNumber={pageNumber}
+                inRange={inRange}
+                onContextMenu={handleContextMenu}
+                onSourceError={onSourceError}
+              />
             );
           })}
         </div>
@@ -207,17 +265,13 @@ export function SourceViewer({
           {source.imageFiles.map((file, index) => {
             const imageNumber = index + 1;
             return (
-              <figure className="source-page-card source-image-card" key={`${file.path}-${index}`}>
-                <div className="source-page-image-wrap">
-                  <img
-                    className="source-page-image"
-                    src={sourcePreviewUrl(source, imageNumber)}
-                    alt={imageAlt(file, imageNumber)}
-                    onError={() => onSourceError?.(SOURCE_READ_FAILURE_MESSAGE)}
-                  />
-                </div>
-                <figcaption>{imageNumber}. {file.name}</figcaption>
-              </figure>
+              <ImagePageCard
+                key={`${file.path}-${index}`}
+                source={source}
+                file={file}
+                imageNumber={imageNumber}
+                onSourceError={onSourceError}
+              />
             );
           })}
         </div>
@@ -241,4 +295,4 @@ export function SourceViewer({
       ) : null}
     </section>
   );
-}
+});

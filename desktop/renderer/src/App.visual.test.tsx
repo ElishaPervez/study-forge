@@ -27,6 +27,8 @@ import {
   sourceRecoveryMessageForGuide,
   sourceErrorAfterGuideAction,
   sourceErrorForGuideResponse,
+  SidebarToggle,
+  SidebarToggleIcon,
   workStateLabel,
 } from "./App";
 import type { GuideSummary, GuideView, SourceView } from "./api";
@@ -637,6 +639,45 @@ describe("Study Forge visual availability markers", () => {
     const markup = renderToStaticMarkup(nav());
 
     expect(markup).not.toContain("Lesson workspace");
+  });
+
+  it("renders the root App component without throwing hook violations", () => {
+    const markup = renderToStaticMarkup(<AppModule.App />);
+    expect(markup).toContain("Starting the local workspace...");
+    expect(markup).toContain("Study Forge");
+  });
+
+  it("renders a sidebar toggle button that exposes collapse and expand accessibility states", () => {
+    const expandedMarkup = renderToStaticMarkup(
+      <SidebarToggle isCompact={false} onToggle={() => undefined} />,
+    );
+
+    expect(expandedMarkup).toContain('class="rail-toggle"');
+    expect(expandedMarkup).toContain('aria-label="Collapse sidebar"');
+    expect(expandedMarkup).toContain('aria-expanded="true"');
+    expect(expandedMarkup).toContain('title="Collapse sidebar"');
+
+    const compactMarkup = renderToStaticMarkup(
+      <SidebarToggle isCompact={true} onToggle={() => undefined} />,
+    );
+
+    expect(compactMarkup).toContain('class="rail-toggle"');
+    expect(compactMarkup).toContain('aria-label="Expand sidebar"');
+    expect(compactMarkup).toContain('aria-expanded="false"');
+    expect(compactMarkup).toContain('title="Expand sidebar"');
+  });
+
+  it("points the sidebar toggle icon in the collapse direction when expanded and expand direction when compact", () => {
+    const expandedIcon = renderToStaticMarkup(<SidebarToggleIcon isCompact={false} />);
+    const compactIcon = renderToStaticMarkup(<SidebarToggleIcon isCompact={true} />);
+
+    expect(expandedIcon).toContain("<svg");
+    expect(expandedIcon).toContain('line x1="5.2"');
+    expect(expandedIcon).toContain("M9.6 5.2L7.8 7L9.6 8.8");
+
+    expect(compactIcon).toContain("<svg");
+    expect(compactIcon).toContain('line x1="5.2"');
+    expect(compactIcon).toContain("M7.8 5.2L9.6 7L7.8 8.8");
   });
 
   it("keeps the PDF selector to one mode and one optional range", () => {

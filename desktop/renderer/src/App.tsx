@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   artifactUrl,
@@ -299,6 +299,41 @@ export function StudyForgeNav() {
   );
 }
 
+export function SidebarToggleIcon({ isCompact }: { isCompact: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <rect x="1.5" y="1.5" width="11" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.2" />
+      <line x1="5.2" y1="1.5" x2="5.2" y2="12.5" stroke="currentColor" strokeWidth="1.2" />
+      {isCompact ? (
+        <path d="M7.8 5.2L9.6 7L7.8 8.8" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+      ) : (
+        <path d="M9.6 5.2L7.8 7L9.6 8.8" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+      )}
+    </svg>
+  );
+}
+
+export const SidebarToggle = memo(function SidebarToggle({
+  isCompact,
+  onToggle,
+}: {
+  isCompact: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="rail-toggle"
+      aria-label={isCompact ? "Expand sidebar" : "Collapse sidebar"}
+      aria-expanded={!isCompact}
+      title={isCompact ? "Expand sidebar" : "Collapse sidebar"}
+      onClick={onToggle}
+    >
+      <SidebarToggleIcon isCompact={isCompact} />
+    </button>
+  );
+});
+
 export type ViewerTab = "source" | "guide";
 
 export function ViewerTabs({
@@ -533,6 +568,7 @@ export function App() {
   const [startupError, setStartupError] = useState<string | null>(null);
   const [startupAttempt, setStartupAttempt] = useState(0);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
+  const [isSidebarCompact, setIsSidebarCompact] = useState(false);
   const [source, setSource] = useState<SourceDraft | null>(null);
   const [pdfSelection, setPdfSelection] = useState<PdfDraftSelection>({
     mode: "all",
@@ -749,7 +785,7 @@ export function App() {
     }
   };
 
-  const handlePdfSelectionChange = (selection: PdfSelection) => {
+  const handlePdfSelectionChange = useCallback((selection: PdfSelection) => {
     if (selection.mode === "all") {
       setPdfSelection((current) => ({ ...current, mode: "all" }));
       return;
@@ -760,18 +796,35 @@ export function App() {
       end: selection.end ?? selection.start ?? 1,
     });
     setSetupError(null);
-  };
+  }, []);
 
-  const handleViewerSelectionChange = (selection: GuideSelection) => {
+  const handleViewerSelectionChange = useCallback((selection: GuideSelection) => {
     if (selection.mode === "images") return;
     handlePdfSelectionChange(selection);
-  };
+  }, [handlePdfSelectionChange]);
+
+  const handleSourceError = useCallback((message: string) => {
+    setSourceError(message);
+    setSetupError(null);
+  }, []);
 
   const handleGuideSelection = useCallback((selection: GuideFrameSelection) => {
     if (workState !== null) return;
     setSetupError(null);
     setRevisionSelection(selection);
   }, [workState]);
+
+  const handleSidebarToggle = useCallback(() => {
+    setIsSidebarCompact((current) => !current);
+  }, []);
+
+  const viewerSource = useMemo(() => {
+    return source ? { ...source, previewBaseUrl: baseUrl ?? undefined } : null;
+  }, [source, baseUrl]);
+
+  const currentViewerSelection = useMemo(() => {
+    return source ? guideSelection(source, pdfSelection) : { mode: "all" as const };
+  }, [source, pdfSelection]);
 
   const handleTabChange = (tab: ViewerTab) => {
     if (tab === "source" && source === null) return;
@@ -1113,10 +1166,16 @@ export function App() {
   return (
     <section className="app-shell" aria-label="Study Forge desktop workspace">
       <StudyForgeNav />
-      <div className="app-body">
-        <aside className="rail" aria-label="Study guide setup">
+      <div className={`app-body ${isSidebarCompact ? "is-rail-compact" : ""}`}>
+        <aside className={`rail ${isSidebarCompact ? "is-compact" : ""}`} aria-label="Study guide setup">
           <div className="rail-inner">
-            <p className="rail-context">Forge / Current guide</p>
+            <div className="rail-header">
+              <SidebarToggle
+                isCompact={isSidebarCompact}
+                onToggle={handleSidebarToggle}
+              />
+              <p className="rail-context" aria-hidden={isSidebarCompact}>Forge / Current guide</p>
+            </div>
             <form className="rail-form" onSubmit={(event) => { event.preventDefault(); void handleForge(); }}>
               <SourceIntake
                 source={source}
@@ -1210,16 +1269,13 @@ export function App() {
                 </div>
               </div>
 
-              {activeTab === "source" && source !== null ? (
+              {activeTab === "source" && viewerSource !== null ? (
                 <SourceViewer
-                  source={{ ...source, previewBaseUrl: baseUrl ?? undefined }}
-                  selection={guideSelection(source, pdfSelection)}
+                  source={viewerSource}
+                  selection={currentViewerSelection}
                   disabled={isBusy}
                   onSelectionChange={handleViewerSelectionChange}
-                  onSourceError={(message) => {
-                    setSourceError(message);
-                    setSetupError(null);
-                  }}
+                  onSourceError={handleSourceError}
                 />
               ) : activeTab === "guide" && guide !== null ? (
                 <GuideCard

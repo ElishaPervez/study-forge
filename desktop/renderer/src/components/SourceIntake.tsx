@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { memo, useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 
 import type { SourceKind, SourceView } from "../api";
 import {
@@ -124,7 +124,7 @@ export function beginSourceRemoval(
   void onRemove();
 }
 
-export function SourceIntake({
+export const SourceIntake = memo(function SourceIntake({
   source,
   disabled = false,
   busy = false,
@@ -275,4 +275,4 @@ export function SourceIntake({
       ) : null}
     </section>
   );
-}
+});

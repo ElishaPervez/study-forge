@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { memo, useState, type KeyboardEvent } from "react";
 
 import type { GuideSummary, HistoryEntry } from "../api";
 
@@ -53,7 +53,7 @@ function statusTone(status: string): string {
   return "working";
 }
 
-export function HistoryList({
+export const HistoryList = memo(function HistoryList({
   guides,
   activeGuideId = null,
   disabled = false,
@@ -215,4 +215,4 @@ export function HistoryList({
       )}
     </section>
   );
-}
+});
