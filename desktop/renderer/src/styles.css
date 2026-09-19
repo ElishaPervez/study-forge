@@ -32,8 +32,9 @@
   --surface: #f7f8fa;
   --ink: #101828;
   --muted: #667085;
-  --border: #e4e7ec;
-  --dash: #c6cbd4;
+  --border: #d6d3cb;
+  --border-strong: #a8a29e;
+  --dash: #a8a29e;
   --accent: #4338ca;
   --accent-hover: #3730a3;
   --accent-wash: #eef2ff;
@@ -141,7 +142,7 @@ h3 {
   gap: 16px;
   min-width: 0;
   padding: 0 8px 0 20px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1.5px solid var(--border-strong);
   background: var(--base);
   -webkit-app-region: drag;
 }
@@ -195,7 +196,7 @@ h3 {
 .rail {
   min-width: 0;
   overflow: hidden;
-  border-right: 1px solid var(--border);
+  border-right: 1.5px solid var(--border-strong);
   background: var(--base);
 }
 
@@ -267,7 +268,7 @@ h3 {
   min-width: 0;
   gap: 11px;
   padding: 16px 0;
-  border-top: 1px solid var(--border);
+  border-top: 1.5px solid var(--border-strong);
 }
 
 .section-heading {
@@ -304,7 +305,7 @@ h3 {
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
 }
@@ -374,7 +375,7 @@ h3 {
 .download-button,
 .text-button,
 .unavailable-row {
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border);
   font-size: 0.72rem;
   line-height: 1;
   text-decoration: none;
@@ -429,7 +430,7 @@ h3 {
   align-items: center;
   justify-content: center;
   padding: 8px 12px;
-  border: 1px dashed var(--border);
+  border: 1.5px dashed var(--dash);
   border-radius: 6px;
   color: var(--muted);
   font-size: 0.64rem;
@@ -467,7 +468,7 @@ h3 {
 .pdf-selection select {
   width: 100%;
   padding: 8px 9px;
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border);
   border-radius: 6px;
   background: var(--base);
   color: var(--ink);
@@ -493,7 +494,7 @@ h3 {
   width: 100%;
   min-width: 0;
   padding: 6px 7px;
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border);
   border-radius: 5px;
   background: var(--base);
   color: var(--ink);
@@ -533,7 +534,7 @@ h3 {
   align-items: center;
   min-width: 0;
   padding: 8px 0;
-  border-top: 1px solid var(--border);
+  border-top: 1.5px solid var(--border);
 }
 
 .image-row-number {
@@ -585,7 +586,7 @@ h3 {
 .unavailable-list {
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--border);
+  border-top: 1.5px solid var(--border);
 }
 
 .unavailable-row {
@@ -597,7 +598,7 @@ h3 {
   min-height: 34px;
   padding: 8px 0;
   border: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1.5px solid var(--border);
   border-radius: 0;
   background: transparent;
   color: var(--disabled);
@@ -631,7 +632,7 @@ h3 {
   margin: 0;
   padding: 10px 0 0;
   border: 0;
-  border-top: 1px solid var(--border);
+  border-top: 1.5px solid var(--border);
 }
 
 .range-row:disabled {
@@ -784,7 +785,7 @@ h3 {
   flex-direction: column;
   gap: 10px;
   padding: 16px 0 0;
-  border-top: 1px solid var(--border);
+  border-top: 1.5px solid var(--border-strong);
 }
 
 .work-progress {
@@ -801,7 +802,7 @@ h3 {
   gap: 11px;
   margin-top: 18px;
   padding: 16px 0 4px;
-  border-top: 1px solid var(--border);
+  border-top: 1.5px solid var(--border-strong);
 }
 
 .history-empty,
@@ -829,7 +830,7 @@ h3 {
   gap: 7px;
   min-width: 0;
   padding: 11px 0 12px;
-  border-top: 1px solid var(--border);
+  border-top: 1.5px solid var(--border);
 }
 
 .history-item:first-child {
@@ -1048,7 +1049,7 @@ h3 {
   gap: 16px;
   min-height: 42px;
   padding: 0 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1.5px solid var(--border-strong);
   background: var(--base);
 }
 
@@ -1124,7 +1125,7 @@ h3 {
   justify-content: space-between;
   gap: 24px;
   padding-bottom: 18px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1.5px solid var(--border-strong);
 }
 
 .viewer-heading-row h2 {
@@ -1154,7 +1155,7 @@ h3 {
   justify-content: space-between;
   gap: 18px;
   padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1.5px solid var(--border-strong);
 }
 
 .source-viewer-heading h3 {
@@ -1188,7 +1189,7 @@ h3 {
   min-width: 0;
   margin: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border);
   background: var(--surface);
 }
 
@@ -1229,7 +1230,7 @@ h3 {
 .source-page-card figcaption {
   overflow: hidden;
   padding: 9px 10px;
-  border-top: 1px solid var(--border);
+  border-top: 1.5px solid var(--border);
   color: var(--muted);
   font-family: "Geist Mono", monospace;
   font-size: 0.57rem;
@@ -1244,7 +1245,7 @@ h3 {
   flex-direction: column;
   min-width: 164px;
   padding: 4px;
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border);
   background: var(--base);
   box-shadow: 0 8px 24px rgba(16, 24, 40, 0.14);
 }
@@ -1315,14 +1316,14 @@ h3 {
   max-width: 38rem;
   margin-top: 28px;
   padding: 24px;
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border);
   background: var(--surface);
 }
 
 .guide-card {
   min-width: 0;
   margin-top: 28px;
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border);
   background: var(--base);
 }
 
@@ -1332,7 +1333,7 @@ h3 {
   justify-content: space-between;
   gap: 18px;
   padding: 18px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1.5px solid var(--border);
 }
 
 .guide-card-heading {
@@ -1456,7 +1457,7 @@ h3 {
   width: 100%;
   min-height: 48px;
   padding: 7px 8px;
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border);
   border-radius: 5px;
   resize: vertical;
   background: var(--base);
@@ -1551,7 +1552,7 @@ h3 {
 .unit-card {
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border);
   border-radius: 8px;
   background: var(--base);
 }
@@ -1562,7 +1563,7 @@ h3 {
   gap: 16px;
   align-items: center;
   padding: 14px 16px 13px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1.5px solid var(--border);
 }
 
 .unit-card-index {
@@ -1734,7 +1735,7 @@ h3 {
 .unit-preview {
   min-width: 0;
   padding: 12px;
-  border-left: 1px solid var(--border);
+  border-left: 1.5px solid var(--border);
   background: var(--surface);
 }
 
@@ -1759,7 +1760,7 @@ h3 {
   display: block;
   width: 100%;
   min-height: 260px;
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border);
   background: var(--base);
 }
 
@@ -1775,7 +1776,7 @@ h3 {
   place-content: center;
   gap: 6px;
   padding: 28px;
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border);
   background: var(--base);
   color: var(--ink);
   text-align: center;
@@ -1912,7 +1913,7 @@ h3 {
   .rail {
     overflow: visible;
     border-right: 0;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1.5px solid var(--border-strong);
   }
 
   .rail-inner {
@@ -1981,7 +1982,7 @@ h3 {
   }
 
   .unit-preview {
-    border-top: 1px solid var(--border);
+    border-top: 1.5px solid var(--border);
     border-left: 0;
   }
 
