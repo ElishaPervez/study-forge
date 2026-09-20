@@ -142,7 +142,8 @@ h3 {
   justify-content: space-between;
   gap: 16px;
   min-width: 0;
-  padding: 0 8px 0 20px;
+  /* No right padding: the window controls sit flush against the window edge. */
+  padding: 0 0 0 20px;
   border-bottom: 1.5px solid var(--border-strong);
   background: var(--base);
   -webkit-app-region: drag;
@@ -156,7 +157,9 @@ h3 {
 .window-controls {
   display: flex;
   flex: none;
-  align-items: center;
+  align-items: stretch;
+  /* Title-bar controls fill the bar so a hover fill reaches the top edge. */
+  align-self: stretch;
   gap: 2px;
   -webkit-app-region: no-drag;
 }
@@ -165,10 +168,10 @@ h3 {
   display: grid;
   place-items: center;
   width: 36px;
-  height: 28px;
+  height: 100%;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: 0;
   background: transparent;
   color: var(--muted);
   -webkit-app-region: no-drag;
@@ -2405,7 +2408,6 @@ h3 {
 @media (max-width: 640px) {
   .app-nav {
     padding-left: 18px;
-    padding-right: 18px;
   }
 
   .viewer-status {
