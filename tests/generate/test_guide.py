@@ -5,6 +5,7 @@ import pytest
 from PIL import Image
 
 from backend.generate.guide import GuideRequest, generate_guide
+from backend.generate.progress import ProgressReporter
 from backend.generate.revision import RevisionRequest, revise_guide
 from backend.ingest.source import store_source
 from backend.llm.client import LLMReply, ToolCall
@@ -20,9 +21,12 @@ class ScriptedLLM:
         self._replies = list(replies)
         self.seen: list[list[dict]] = []
 
-    def complete(self, messages, tools=None) -> LLMReply:
+    def complete(self, messages, tools=None, *, on_text=None, stop=None) -> LLMReply:
         self.seen.append(list(messages))
-        return self._replies.pop(0)
+        reply = self._replies.pop(0)
+        if on_text is not None:
+            on_text(reply.text)
+        return reply
 
 
 def _write_image(path: Path) -> None:
@@ -227,6 +231,98 @@ def test_revision_truncation_is_named_in_the_repair_prompt(tmp_path: Path) -> No
 
     assert result.html is not None
     assert "output budget mid-document" in llm.seen[1][-1]["content"]
+
+
+class ActivityRecorder:
+    def __init__(self) -> None:
+        self.activities: list[str] = []
+        self.reporter = ProgressReporter(on_change=self.record)
+
+    def record(self) -> None:
+        activity = self.reporter.snapshot().activity
+        if not self.activities or self.activities[-1] != activity:
+            self.activities.append(activity)
+
+
+def test_observing_progress_does_not_change_the_generated_guide(tmp_path: Path) -> None:
+    image = tmp_path / "lesson.png"
+    _write_image(image)
+    source = store_source(tmp_path / "jobs", [image], "images")
+    bundle = load_bundle(SKILL_DIR)
+    request = GuideRequest("guide-6", source, {"mode": "images"})
+
+    plain = generate_guide(
+        request,
+        source_root=tmp_path / "jobs",
+        llm=ScriptedLLM([LLMReply(text=GOOD)]),
+        bundle=bundle,
+        fonts_css="",
+        out_dir=tmp_path / "plain",
+    )
+    recorder = ActivityRecorder()
+    measured = generate_guide(
+        request,
+        source_root=tmp_path / "jobs",
+        llm=ScriptedLLM([LLMReply(text=GOOD)]),
+        bundle=bundle,
+        fonts_css="",
+        out_dir=tmp_path / "measured",
+        progress=recorder.reporter,
+    )
+
+    assert measured.status is plain.status
+    assert measured.calls == plain.calls
+    assert measured.name == plain.name
+    assert measured.requested_refs == plain.requested_refs
+    assert measured.artifact_path is not None and plain.artifact_path is not None
+    assert measured.artifact_path.read_bytes() == plain.artifact_path.read_bytes()
+    assert recorder.activities == ["preparing", "waiting", "writing", "checking"]
+
+
+def test_revision_progress_reports_reference_work_and_correction(tmp_path: Path) -> None:
+    reference_turn = LLMReply(
+        text="",
+        tool_calls=[ToolCall("call_1", "read_reference", '{"name":"type-process.md"}')],
+    )
+    invalid = GOOD.replace("<body>", '<body><img src="assets/page.png" alt="page">', 1)
+    llm = ScriptedLLM([reference_turn, LLMReply(text=invalid), LLMReply(text=GOOD)])
+    recorder = ActivityRecorder()
+
+    result = _revise_with(
+        tmp_path,
+        llm,
+        progress=recorder.reporter,
+    )
+
+    assert result.html is not None
+    assert result.calls == 3
+    assert recorder.activities == [
+        "preparing",
+        "waiting",
+        "references",
+        "waiting",
+        "writing",
+        "checking",
+        "correcting",
+        "waiting",
+        "writing",
+        "checking",
+    ]
+
+
+def _revise_with(tmp_path: Path, llm, *, progress) -> object:
+    image = tmp_path / "lesson.png"
+    _write_image(image)
+    source = store_source(tmp_path / "jobs", [image], "images")
+    return revise_guide(
+        _revision_request(source),
+        source_root=tmp_path / "jobs",
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        checker=lambda _path, _skill_dir: CheckResult(True, []),
+        progress=progress,
+    )
 
 
 def test_revision_reference_lookups_do_not_consume_the_attempts(tmp_path: Path) -> None:

@@ -7,8 +7,12 @@ import {
   type HistoryEntry,
   type GuideSummary,
   type GuideView,
+  type OperationSummary,
+  type QueueRow,
   type SourceView,
 } from "./api";
+import { GenerationQueue } from "./components/GenerationQueue";
+import { useGenerationQueue } from "./useGenerationQueue";
 import {
   artifactFetchOptions,
   GuideCard,
@@ -489,6 +493,52 @@ function guideStatusLabel(status: string): string {
   return status;
 }
 
+/** A guide with a request waiting or running cannot be changed until it settles. */
+export function guideIsReadOnly(
+  busyGuideIds: ReadonlySet<string>,
+  guideId: string | null,
+): boolean {
+  return guideId !== null && busyGuideIds.has(guideId);
+}
+
+/** The newest failed or interrupted request that can still be repeated for a guide. */
+export function retryableRequestForGuide(
+  history: HistoryEntry[],
+  activeGuide: GuideView | null,
+  guideId: string,
+): OperationSummary | null {
+  if (activeGuide !== null && activeGuide.guide_id === guideId) {
+    return activeGuide.retryable_request ?? null;
+  }
+  for (const entry of history) {
+    if (entry.kind === "legacy" || entry.guide_id !== guideId) continue;
+    return entry.retryable_request ?? null;
+  }
+  return null;
+}
+
+export function queueRowForGuide(rows: QueueRow[], guideId: string | null): QueueRow | null {
+  if (guideId === null) return null;
+  const own = rows.filter((row) => row.guide_id === guideId);
+  if (own.length === 0) return null;
+  const active = own.filter((row) => row.state === "running" || row.state === "waiting");
+  return (active.length > 0 ? active : [...own].sort((a, b) => b.order - a.order))[0];
+}
+
+/** What the Study guide area says while this guide's request is queued or running. */
+export function queueRowNotice(row: QueueRow | null): string | null {
+  if (row === null) return null;
+  if (row.state === "waiting") {
+    return "This request is waiting its turn. You can keep browsing while it waits.";
+  }
+  if (row.state === "running") {
+    return row.kind === "create"
+      ? "This guide is being written now. You can keep browsing while it is prepared."
+      : "This guide is being updated. The version shown stays readable until the new one is checked.";
+  }
+  return null;
+}
+
 const CLARIFY_REVISION_INSTRUCTION = "Clarify the selected passage in the study guide.";
 
 export function replaceGuideInHistory(
@@ -600,6 +650,8 @@ export function App() {
   const [reselectText, setReselectText] = useState<string | null>(null);
   const historyLoadGuardRef = useRef<HistoryLoadGuard | null>(null);
   const exportBusyRef = useRef(false);
+  const forgePendingRef = useRef(false);
+  const revisionPendingRef = useRef(false);
   const exportContextKey = exportFeedbackContextKey(guide, source?.sourceId ?? null);
   const exportContextKeyRef = useRef(exportContextKey);
   if (historyLoadGuardRef.current === null) {
@@ -608,19 +660,19 @@ export function App() {
   const historyLoadGuard = historyLoadGuardRef.current;
 
   const api = useMemo(() => (baseUrl === null ? null : createApi(baseUrl)), [baseUrl]);
-  const isBusy = sourceControlsLocked(workState);
+  // Source work (reading, removing, opening, renaming, deleting, exporting) is a
+  // short local action; guide work runs in the background queue and never locks
+  // the rest of the app.
+  const sourceBusy = sourceControlsLocked(workState);
   const hasGuide = guide !== null;
   const pdfSelectionIsValid = source?.kind !== "pdf"
     || (pdfSelection.start >= 1 && pdfSelection.end >= pdfSelection.start);
-  const canForge = canForgeStudyGuide(
-    startupState === "ready",
-    api !== null,
-    source,
-    pdfSelectionIsValid,
-    isBusy,
-    sourceError,
-  );
-  const canExport = canExportGuide(guide, workState);
+  const selectedGuideIdRef = useRef<string | null>(null);
+  const sourceIdRef = useRef<string | null>(null);
+  const readOnlyRef = useRef(false);
+  const viewLoadGuardRef = useRef<HistoryLoadGuard | null>(null);
+  if (viewLoadGuardRef.current === null) viewLoadGuardRef.current = createHistoryLoadGuard();
+  const viewLoadGuard = viewLoadGuardRef.current;
 
   useEffect(() => {
     setRevisionSelection(null);
@@ -650,6 +702,53 @@ export function App() {
       setHistoryError(error instanceof Error ? error.message : "Saved guides could not be loaded.");
     }
   };
+
+  async function handleGuideSettled(guideId: string) {
+    // A finished request changes saved history. The open document is reloaded
+    // only when that same guide is still selected and nothing newer replaced it.
+    if (api === null) return;
+    await refreshHistory(api);
+    if (selectedGuideIdRef.current !== guideId) return;
+    const requestVersion = viewLoadGuard.begin();
+    try {
+      const reloaded = await api.getGuide(guideId);
+      if (selectedGuideIdRef.current !== guideId) return;
+      if (!viewLoadGuard.isCurrent(requestVersion)) return;
+      setGuide((current) => mergeGuideResponse(current, reloaded));
+      setSourceError((currentError) => sourceErrorAfterGuideAction(
+        selectedGuideIdRef.current,
+        sourceIdRef.current,
+        reloaded,
+        currentError,
+      ));
+    } catch {
+      // The queue panel already explains a failed request.
+    }
+  }
+
+  const queue = useGenerationQueue({
+    api,
+    onGuideSettled: (guideId) => {
+      void handleGuideSettled(guideId);
+    },
+  });
+
+  const selectedGuideReadOnly = guideIsReadOnly(queue.busyGuides, guide?.guide_id ?? null);
+  const sourceControlsDisabled = sourceBusy || selectedGuideReadOnly;
+  const selectedQueueRow = queueRowForGuide(queue.rows, guide?.guide_id ?? null);
+  const selectedGuideNotice = queueRowNotice(selectedQueueRow);
+  const canForge = canForgeStudyGuide(
+    startupState === "ready",
+    api !== null,
+    source,
+    pdfSelectionIsValid,
+    sourceBusy || queue.submitting || selectedGuideReadOnly,
+    sourceError,
+  );
+  const canExport = canExportGuide(guide, workState);
+  selectedGuideIdRef.current = guide?.guide_id ?? null;
+  sourceIdRef.current = source?.sourceId ?? null;
+  readOnlyRef.current = selectedGuideReadOnly;
 
   const retryStartup = () => {
     setStartupError(null);
@@ -688,7 +787,7 @@ export function App() {
   }, [startupAttempt]);
 
   const handlePathsSelected = async (paths: string[]) => {
-    if (api === null || isBusy) return;
+    if (api === null || sourceBusy) return;
 
     const classification = classifySourcePaths(paths);
     if ("error" in classification) {
@@ -742,15 +841,17 @@ export function App() {
     void handlePathsSelected(paths);
     // handlePathsSelected is re-created each render; keying on its inputs keeps the
     // drop callback fresh without re-registering the window listeners every render.
-  }, [api, isBusy, source]);
+  }, [api, sourceBusy, source]);
 
   const globalDropOverlayVisible = useGlobalFileDrop({
-    disabled: startupState !== "ready" || isBusy,
+    disabled: startupState !== "ready" || sourceBusy,
     onFilesDropped: handleWindowFilesDropped,
   });
 
   const handleImagesChange = (files: ImageFile[]) => {
-    if (api === null || source === null || source.kind !== "images" || isBusy) return;
+    if (api === null || source === null || source.kind !== "images" || sourceControlsDisabled) {
+      return;
+    }
 
     const previousSource = source;
     setExportFeedback(null);
@@ -776,7 +877,7 @@ export function App() {
   };
 
   const handleRemoveSource = async () => {
-    if (api === null || source === null || isBusy) return;
+    if (api === null || source === null || sourceControlsDisabled) return;
 
     setExportFeedback(null);
     setWorkState("removing");
@@ -825,10 +926,10 @@ export function App() {
       setRevisionSelection(null);
       return;
     }
-    if (workState !== null) return;
+    if (sourceBusy || readOnlyRef.current) return;
     setSetupError(null);
     setRevisionSelection(selection);
-  }, [workState]);
+  }, [sourceBusy]);
 
   const handleSidebarToggle = useCallback(() => {
     setIsSidebarCompact((current) => !current);
@@ -850,19 +951,21 @@ export function App() {
   };
 
   const handleForge = async () => {
-    if (!canForge || api === null || source === null) return;
+    // One Forge action creates one guide and queues writing it. The screen does
+    // not wait for the guide: it follows the queue instead.
+    if (!canForge || api === null || source === null || forgePendingRef.current) return;
+    forgePendingRef.current = true;
 
     setExportFeedback(null);
     setRevisionSelection(null);
     setReselectText(null);
     setSetupError(null);
-    setWorkState("creating");
     let currentSource = source;
-    let createdGuideId: string | null = null;
     let createAttempted = false;
     try {
       const paths = sourcePathsForForge(currentSource);
       if (!samePaths(paths, currentSource.registeredPaths ?? currentSource.paths)) {
+        setWorkState("registering");
         const registered = await api.registerSource(paths);
         const previousSourceId = currentSource.sourceId;
         currentSource = draftFromSource(registered, paths);
@@ -870,29 +973,22 @@ export function App() {
         if (previousSourceId !== currentSource.sourceId) {
           await api.removeSource(previousSourceId);
         }
+        setWorkState(null);
       }
 
       const selection = guideSelection(currentSource, pdfSelection);
       historyLoadGuard.invalidate();
       createAttempted = true;
-      const createdGuide = await api.createGuide(currentSource.sourceId, selection);
-      createdGuideId = createdGuide.guide_id;
-      setGuide(createdGuide);
+      const outcome = await queue.submitGuide(currentSource.sourceId, selection);
+      const accepted = outcome.guide ?? (await api.getGuide(outcome.guide_id));
+      setGuide(accepted);
       setActiveTab("guide");
-      await refreshHistory();
-      setWorkState("generating");
-      historyLoadGuard.invalidate();
-      const generatedGuide = await api.generateGuide(createdGuide.guide_id);
-      setGuide(generatedGuide);
-      const sourceRecovery = sourceErrorForGuideResponse(generatedGuide);
+      const sourceRecovery = sourceErrorForGuideResponse(accepted);
       setSourceError(sourceRecovery);
-      if (sourceRecovery !== null) {
-        setSetupError(null);
-        setActiveTab("source");
-      }
+      if (sourceRecovery !== null) setActiveTab("source");
       await refreshHistory();
     } catch (error: unknown) {
-      if (createdGuideId !== null || createAttempted) await refreshHistory();
+      if (createAttempted) await refreshHistory();
       const message = error instanceof Error ? error.message : "The local service rejected the guide.";
       if (isSourceReadError(message)) {
         setSourceError(message);
@@ -902,41 +998,49 @@ export function App() {
         setSetupError(message);
       }
     } finally {
+      forgePendingRef.current = false;
       setWorkState(null);
     }
   };
 
   const handleRevision = async (mode: "clarify" | "custom", instruction: string) => {
-    if (api === null || guide === null || revisionSelection === null || isBusy) return;
+    if (api === null || guide === null || revisionSelection === null) return;
+    if (selectedGuideReadOnly || revisionPendingRef.current) return;
+    revisionPendingRef.current = true;
 
     const activeGuideId = guide.guide_id;
     const activeSourceId = source?.sourceId ?? null;
     const selectedText = revisionSelection.selectedText;
     setExportFeedback(null);
-    setRevisionSelection(null);
     setReselectText(null);
     setSetupError(null);
     setSetupErrorTitle("Could not update the guide");
-    setWorkState("revising");
     historyLoadGuard.invalidate();
 
     try {
-      const revisedGuide = await api.reviseGuide(guide.guide_id, {
+      const outcome = await queue.revise(guide.guide_id, {
         selected_text: selectedText,
         instruction,
         mode,
       });
-      setGuide((current) => mergeGuideResponse(current, revisedGuide));
-      setSourceError((currentError) => sourceErrorAfterGuideAction(
-        activeGuideId,
-        activeSourceId,
-        revisedGuide,
-        currentError,
-      ));
-      setHistory((current) => replaceGuideInHistory(current, revisedGuide));
+      // The update is accepted and queued. The entry closes now that the
+      // request is recorded, and this guide stays read-only until it settles.
+      const accepted = outcome.guide;
+      setRevisionSelection(null);
       setReselectText(selectedText);
+      if (accepted !== null) {
+        setGuide((current) => mergeGuideResponse(current, accepted));
+        setSourceError((currentError) => sourceErrorAfterGuideAction(
+          activeGuideId,
+          activeSourceId,
+          accepted,
+          currentError,
+        ));
+        setHistory((current) => replaceGuideInHistory(current, accepted));
+      }
       await refreshHistory();
     } catch (error: unknown) {
+      setRevisionSelection(null);
       const message = error instanceof Error ? error.message : "The guide could not be updated.";
       if (isSourceReadError(message)) {
         setSourceError(message);
@@ -945,7 +1049,7 @@ export function App() {
         setSetupError(message);
       }
     } finally {
-      setWorkState(null);
+      revisionPendingRef.current = false;
     }
   };
 
@@ -977,16 +1081,19 @@ export function App() {
     }
   };
 
-  const handleOpenGuide = async (summary: GuideSummary) => {
-    if (api === null || isBusy) return;
+  const handleOpenGuide = async (summary: { guide_id: string }) => {
+    // A guide with a request waiting or running still opens for viewing.
+    if (api === null || sourceBusy) return;
 
     setExportFeedback(null);
     setRevisionSelection(null);
     setReselectText(null);
     setWorkState("opening");
-      setSetupError(null);
+    setSetupError(null);
+    const requestVersion = viewLoadGuard.begin();
     try {
       const openedGuide = await api.getGuide(summary.guide_id);
+      if (!viewLoadGuard.isCurrent(requestVersion)) return;
       const sourceRecovery = sourceErrorForGuideResponse(openedGuide);
       if (openedGuide.source === undefined || openedGuide.source === null) {
         setSource(null);
@@ -1014,7 +1121,7 @@ export function App() {
   };
 
   const handleRenameGuide = async (guideId: string, name: string) => {
-    if (api === null || isBusy) return;
+    if (api === null || sourceBusy) return;
 
     const activeGuideId = guide?.guide_id ?? null;
     const activeSourceId = source?.sourceId ?? null;
@@ -1042,47 +1149,76 @@ export function App() {
   };
 
   const handleRetryGuide = async (guideId: string) => {
-    if (api === null || isBusy) return;
+    if (api === null || sourceBusy) return;
 
     const activeGuideId = guide?.guide_id ?? null;
     const activeSourceId = source?.sourceId ?? null;
     setExportFeedback(null);
     setRevisionSelection(null);
     setReselectText(null);
-    setWorkState("retrying");
     setSetupError(null);
     try {
       historyLoadGuard.invalidate();
-      const retriedGuide = await api.retryGuide(guideId);
-      setGuide((current) => mergeGuideResponse(current, retriedGuide));
-      setHistory((current) => replaceGuideInHistory(current, retriedGuide));
-      const sourceRecovery = sourceErrorForGuideResponse(retriedGuide);
-      const updatesVisibleSource = sourceErrorActionTargetsContext(
-        activeGuideId,
-        activeSourceId,
-        retriedGuide,
-      );
-      setSourceError((currentError) => sourceErrorAfterGuideAction(
-        activeGuideId,
-        activeSourceId,
-        retriedGuide,
-        currentError,
-      ));
-      if (updatesVisibleSource && sourceRecovery !== null) {
-        setSetupError(null);
-        setActiveTab("source");
+      // A failed or interrupted update is retried by its own saved request, so
+      // its edit and the guide version it targets are repeated exactly.
+      const failedRequest = retryableRequestForGuide(history, guide, guideId);
+      const outcome = failedRequest === null
+        ? await queue.retryGuide(guideId)
+        : await queue.retryOperation(failedRequest.receipt);
+      const retriedGuide = outcome.guide;
+      if (retriedGuide !== null) {
+        setGuide((current) => mergeGuideResponse(current, retriedGuide));
+        setHistory((current) => replaceGuideInHistory(current, retriedGuide));
+        const sourceRecovery = sourceErrorForGuideResponse(retriedGuide);
+        const updatesVisibleSource = sourceErrorActionTargetsContext(
+          activeGuideId,
+          activeSourceId,
+          retriedGuide,
+        );
+        setSourceError((currentError) => sourceErrorAfterGuideAction(
+          activeGuideId,
+          activeSourceId,
+          retriedGuide,
+          currentError,
+        ));
+        if (updatesVisibleSource && sourceRecovery !== null) {
+          setSetupError(null);
+          setActiveTab("source");
+        }
       }
       await refreshHistory();
     } catch (error: unknown) {
       setSetupErrorTitle("Could not retry the guide");
       setSetupError(error instanceof Error ? error.message : "The guide could not be retried.");
-    } finally {
-      setWorkState(null);
     }
   };
 
+  const handleRetryRequest = async (request: string) => {
+    if (api === null || sourceBusy) return;
+
+    setExportFeedback(null);
+    setSetupError(null);
+    try {
+      const outcome = await queue.retryOperation(request);
+      const accepted = outcome.guide;
+      if (accepted !== null) setGuide((current) => mergeGuideResponse(current, accepted));
+      await refreshHistory();
+    } catch (error: unknown) {
+      setSetupErrorTitle("Could not retry the request");
+      setSetupError(error instanceof Error ? error.message : "The request could not be retried.");
+    }
+  };
+
+  const handleQueueRetry = (row: QueueRow) => {
+    if (row.kind === "update" || row.kind === "clarify") {
+      void handleRetryRequest(row.receipt);
+      return;
+    }
+    void handleRetryGuide(row.guide_id);
+  };
+
   const handleDeleteGuide = async (guideId: string) => {
-    if (api === null || isBusy) return;
+    if (api === null || sourceBusy) return;
 
     setExportFeedback(null);
     setRevisionSelection(null);
@@ -1173,8 +1309,14 @@ export function App() {
   const viewerMessage = guide === null
     ? "Forge one guide to see it here."
     : guide.error ?? "The guide is still being prepared.";
+  const viewerStatus = guide === null
+    ? "Waiting for a source"
+    : selectedQueueRow !== null && (selectedQueueRow.state === "running" || selectedQueueRow.state === "waiting")
+      ? selectedQueueRow.state === "waiting" ? "Waiting in the queue" : "Writing the guide"
+      : guideStatusLabel(guide.status);
 
   return (
+    <>
     <section className="app-shell" aria-label="Study Forge desktop workspace">
       <StudyForgeNav />
       <div className={`app-body ${isSidebarCompact ? "is-rail-compact" : ""}`}>
@@ -1192,7 +1334,8 @@ export function App() {
                 <SourceIntake
                   source={source}
                   disabled={startupState !== "ready"}
-                  busy={sourceControlsLocked(workState)}
+                  busy={sourceBusy}
+                  readOnly={selectedGuideReadOnly}
                   error={sourceError}
                   onPathsSelected={handlePathsSelected}
                   onRemove={handleRemoveSource}
@@ -1205,7 +1348,7 @@ export function App() {
                     mode={pdfSelection.mode}
                     start={pdfSelection.start}
                     end={pdfSelection.end}
-                    disabled={isBusy}
+                    disabled={sourceControlsDisabled}
                     onChange={handlePdfSelectionChange}
                   />
                 ) : null}
@@ -1220,7 +1363,8 @@ export function App() {
                 <HistoryList
                   guides={history}
                   activeGuideId={guide?.guide_id}
-                  disabled={isBusy}
+                  disabled={sourceBusy}
+                  busyGuideIds={queue.busyGuides}
                   scrollContainerRef={railScrollRef}
                   onOpen={handleOpenGuide}
                   onRename={handleRenameGuide}
@@ -1240,9 +1384,13 @@ export function App() {
                   type="submit"
                   className="primary-button generate-button"
                   disabled={!canForge}
-                  aria-busy={workState === "creating" || workState === "generating"}
+                  aria-busy={queue.submitting}
                 >
-                  {workState === "creating" ? "Preparing guide..." : workState === "generating" ? "Generating guide..." : "Forge study guide"}
+                  {workState === "registering"
+                    ? "Preparing source..."
+                    : queue.submitting
+                      ? "Sending request..."
+                      : "Forge study guide"}
                 </button>
                 <ExportAction
                   disabled={!canExport}
@@ -1262,14 +1410,13 @@ export function App() {
                 hasJob={hasGuide}
                 hasSource={source !== null}
                 activeTab={activeTab}
-                disabled={isBusy}
                 onTabChange={handleTabChange}
               />
               {viewingGuide ? <GuideToolbarHeading name={guide.name} /> : null}
               <div className="viewer-toolbar-tools">
                 <div className="viewer-status" aria-live="polite">
                   <span className="viewer-status-dot" aria-hidden="true" />
-                  <span>{workState !== null ? workStateLabel(workState) : guide === null ? "Waiting for a source" : guideStatusLabel(guide.status)}</span>
+                  <span>{workState !== null ? workStateLabel(workState) : viewerStatus}</span>
                 </div>
               </div>
             </header>
@@ -1288,17 +1435,23 @@ export function App() {
                 <SourceViewer
                   source={viewerSource}
                   selection={currentViewerSelection}
-                  disabled={isBusy}
+                  disabled={sourceControlsDisabled}
                   onSelectionChange={handleViewerSelectionChange}
                   onSourceError={handleSourceError}
                 />
               ) : activeTab === "guide" && guide !== null ? (
+                <>
+                {selectedGuideNotice !== null ? (
+                  <p className="viewer-work-notice" role="status" aria-live="polite">
+                    {selectedGuideNotice}
+                  </p>
+                ) : null}
                 <GuideCard
                   key={`${guide.guide_id}-${guide.revision_count}`}
                   guide={guide}
                   baseUrl={baseUrl ?? ""}
                   onSelection={handleGuideSelection}
-                  revisionBusy={workState === "revising"}
+                  revisionBusy={selectedGuideReadOnly}
                   reselectText={reselectText}
                   revisionPopup={revisionSelection === null ? undefined : (
                     <RevisionPopup
@@ -1311,6 +1464,7 @@ export function App() {
                     />
                   )}
                 />
+                </>
               ) : (
                 <section className="viewer-empty" aria-labelledby="empty-viewer-heading">
                   <h3>{activeTab === "source" ? "Choose a source" : "Forge one focused guide"}</h3>
@@ -1327,5 +1481,15 @@ export function App() {
       </div>
       {globalDropOverlayVisible ? <GlobalDropIndicator /> : null}
     </section>
+    <GenerationQueue
+      rows={queue.rows}
+      connected={queue.connected}
+      error={queue.error}
+      onOpenGuide={(guideId) => void handleOpenGuide({ guide_id: guideId })}
+      onRetry={handleQueueRetry}
+      onDismiss={queue.dismiss}
+      onDismissFinished={queue.dismissFinished}
+    />
+    </>
   );
 }

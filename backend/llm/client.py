@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from threading import Event
 from typing import Protocol
 
 import httpx
 
 from backend.ingest.pdf import InputImage
+from backend.llm.stream import StreamAccumulator, StreamError
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 RETRYABLE = {408, 429, 500, 502, 503, 504}
@@ -17,6 +19,13 @@ class LLMError(RuntimeError):
     def __init__(self, message: str, *, retryable: bool) -> None:
         super().__init__(message)
         self.retryable = retryable
+
+
+class LLMStopped(LLMError):
+    """The caller stopped the work, so the reply is not a usable result."""
+
+    def __init__(self, message: str = "model work was stopped") -> None:
+        super().__init__(message, retryable=False)
 
 
 @dataclass(frozen=True)
@@ -41,7 +50,12 @@ class LLMReply:
 
 class LLM(Protocol):
     def complete(
-        self, messages: Sequence[dict], tools: Sequence[dict] | None = None
+        self,
+        messages: Sequence[dict],
+        tools: Sequence[dict] | None = None,
+        *,
+        on_text: Callable[[str], None] | None = None,
+        stop: Event | None = None,
     ) -> LLMReply: ...
 
 
@@ -84,13 +98,19 @@ class OpenRouterLLM:
         )
 
     def complete(
-        self, messages: Sequence[dict], tools: Sequence[dict] | None = None
+        self,
+        messages: Sequence[dict],
+        tools: Sequence[dict] | None = None,
+        *,
+        on_text: Callable[[str], None] | None = None,
+        stop: Event | None = None,
     ) -> LLMReply:
         body: dict = {
             "model": self._model,
             "messages": list(messages),
             "max_tokens": self._max_output_tokens,
             "reasoning_effort": self._reasoning_effort,
+            "stream": True,
             "provider": {
                 "only": self._provider_only,
                 "allow_fallbacks": False,
@@ -98,38 +118,51 @@ class OpenRouterLLM:
         }
         if tools:
             body["tools"] = list(tools)
+        accumulator = StreamAccumulator(on_text=on_text)
         try:
-            response = self._client.post(API_URL, json=body)
+            with self._client.stream("POST", API_URL, json=body) as response:
+                if response.status_code != 200:
+                    response.read()
+                    raise LLMError(
+                        f"OpenRouter returned {response.status_code}: {response.text[:300]}",
+                        retryable=response.status_code in RETRYABLE,
+                    )
+                for line in response.iter_lines():
+                    if stop is not None and stop.is_set():
+                        raise LLMStopped()
+                    accumulator.feed_line(line)
         except httpx.TimeoutException as exc:
             raise LLMError("OpenRouter request timed out", retryable=True) from exc
         except httpx.TransportError as exc:
             raise LLMError(f"OpenRouter request failed: {exc}", retryable=True) from exc
-
-        if response.status_code != 200:
+        except StreamError as error:
             raise LLMError(
-                f"OpenRouter returned {response.status_code}: {response.text[:300]}",
-                retryable=response.status_code in RETRYABLE,
+                f"OpenRouter sent unreadable streamed output: {error}", retryable=True
+            ) from error
+
+        if accumulator.error is not None:
+            raise LLMError(
+                f"OpenRouter reported an error after output began: {accumulator.error}",
+                retryable=True,
             )
-        payload = response.json()
-        if not payload.get("choices"):
-            raise LLMError("OpenRouter returned no choices", retryable=False)
-        choice = payload["choices"][0]
-        message = choice.get("message", {})
-        usage = payload.get("usage", {})
-        token_details = usage.get("completion_tokens_details") or {}
+        if not accumulator.terminal:
+            raise LLMError(
+                "OpenRouter ended the reply before it finished", retryable=True
+            )
+        reply = accumulator.result()
         calls = [
             ToolCall(
-                id=call.get("id", ""),
-                name=call.get("function", {}).get("name", ""),
-                arguments=call.get("function", {}).get("arguments", "{}"),
+                id=fragment.call_id,
+                name=fragment.name,
+                arguments=fragment.arguments or "{}",
             )
-            for call in message.get("tool_calls") or []
+            for fragment in reply.tool_calls
         ]
         return LLMReply(
-            text=message.get("content") or "",
+            text=reply.text,
             tool_calls=calls,
-            prompt_tokens=int(usage.get("prompt_tokens", 0)),
-            completion_tokens=int(usage.get("completion_tokens", 0)),
-            finish_reason=str(choice.get("finish_reason") or ""),
-            reasoning_tokens=int(token_details.get("reasoning_tokens", 0) or 0),
+            prompt_tokens=reply.prompt_tokens,
+            completion_tokens=reply.completion_tokens,
+            finish_reason=reply.finish_reason,
+            reasoning_tokens=reply.reasoning_tokens,
         )

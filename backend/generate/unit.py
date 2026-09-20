@@ -10,11 +10,20 @@ from dataclasses import dataclass, field
 from enum import Enum
 from html.parser import HTMLParser
 from pathlib import Path
+from threading import Event
 
 from backend.fonts.embed import inject_fonts
+from backend.generate.progress import (
+    ACTIVITY_CHECKING,
+    ACTIVITY_CORRECTING,
+    ACTIVITY_REFERENCES,
+    ACTIVITY_RETRYING,
+    ACTIVITY_WAITING,
+    ProgressReporter,
+)
 from backend.ingest.pdf import InputImage
 from backend.jobs.schema import Selection, SourceKind
-from backend.llm.client import LLM, LLMError, LLMReply, ToolCall, image_part
+from backend.llm.client import LLM, LLMError, LLMReply, LLMStopped, ToolCall, image_part
 from backend.mathml.render import render_math
 from backend.prompt.build import build_initial_message, build_unit_message
 from backend.skill.bundle import Bundle
@@ -25,6 +34,7 @@ MAX_CALLS = 3
 # Reference lookups are not generation attempts. Sharing one budget let the model
 # spend every call reading references and never get to write, or repair, an artifact.
 MAX_TOOL_TURNS = 6
+STOPPED_FINDING = "work was stopped before a guide was completed"
 RETRY_BACKOFF_BASE_SECONDS = 0.1
 RETRY_BACKOFF_MAX_SECONDS = 1.0
 V1_FORBIDDEN_TAGS = {"base", "embed", "object", "iframe"}
@@ -498,6 +508,10 @@ def _repair_prompt(findings: Sequence[str]) -> str:
     )
 
 
+def stopped_work(stop: Event | None) -> bool:
+    return stop is not None and stop.is_set()
+
+
 def _backoff_seconds(call_number: int) -> float:
     return min(
         RETRY_BACKOFF_BASE_SECONDS * (2 ** max(call_number - 1, 0)),
@@ -532,6 +546,8 @@ def generate_unit(
     max_calls: int = MAX_CALLS,
     checker: Callable[[Path, Path], CheckResult] = run_self_check,
     status_callback: Callable[[UnitStatus], None] | None = None,
+    progress: ProgressReporter | None = None,
+    stop: Event | None = None,
 ) -> UnitResult:
     budget = max(0, min(MAX_CALLS, max_calls))
     calls = 0
@@ -560,14 +576,30 @@ def generate_unit(
     tool_turns = 0
 
     while attempts < budget:
+        if stopped_work(stop):
+            return _failed_result(
+                UnitStatus.FAILED, calls, requested, artifact_path, published, [STOPPED_FINDING]
+            )
         if tool_turns >= MAX_TOOL_TURNS:
             last_findings = [
                 "reference lookups exhausted their allowance before any HTML was written"
             ]
             break
         calls += 1
+        if progress is not None:
+            progress.begin_attempt()
+            progress.set_activity(ACTIVITY_WAITING)
         try:
-            reply: LLMReply = llm.complete(messages, tools=_tools(bundle))
+            reply: LLMReply = llm.complete(
+                messages,
+                tools=_tools(bundle),
+                on_text=progress.observe if progress is not None else None,
+                stop=stop,
+            )
+        except LLMStopped:
+            return _failed_result(
+                UnitStatus.FAILED, calls, requested, artifact_path, published, [STOPPED_FINDING]
+            )
         except LLMError as error:
             attempts += 1
             error_finding = str(error)
@@ -581,11 +613,17 @@ def generate_unit(
                     published,
                     findings,
                 )
+            if progress is not None:
+                progress.set_activity(ACTIVITY_RETRYING)
             time.sleep(_backoff_seconds(calls))
             continue
 
         if reply.tool_calls:
             tool_turns += 1
+            if progress is not None:
+                # A reference turn is not writing: its provisional count is dropped.
+                progress.discard_attempt_progress()
+                progress.set_activity(ACTIVITY_REFERENCES)
             messages.append(
                 {
                     "role": "assistant",
@@ -621,13 +659,21 @@ def generate_unit(
             messages.append({"role": "user", "content": _empty_reply_prompt(last_findings[0])})
             if status_callback is not None:
                 status_callback(UnitStatus.REPAIRING)
+            if progress is not None:
+                progress.set_activity(ACTIVITY_CORRECTING)
             continue
 
+        if stopped_work(stop):
+            return _failed_result(
+                UnitStatus.FAILED, calls, requested, artifact_path, published, [STOPPED_FINDING]
+            )
         html = inject_fonts(render_math(_strip_fences(reply.text or "")), fonts_css)
         _write_atomic(artifact_path, html)
         published = True
         if status_callback is not None:
             status_callback(UnitStatus.VERIFYING)
+        if progress is not None:
+            progress.set_activity(ACTIVITY_CHECKING)
         policy_findings = _v1_output_policy_findings(html)
         result = checker(artifact_path, bundle.skill_dir)
         if result.ok and not policy_findings:
@@ -652,6 +698,8 @@ def generate_unit(
         messages.append({"role": "user", "content": _repair_prompt(last_findings)})
         if status_callback is not None:
             status_callback(UnitStatus.REPAIRING)
+        if progress is not None:
+            progress.set_activity(ACTIVITY_CORRECTING)
 
     return _failed_result(
         UnitStatus.NEEDS_ATTENTION,

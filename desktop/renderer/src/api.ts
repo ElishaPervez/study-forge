@@ -76,6 +76,55 @@ export interface RevisionRequest {
   mode: RevisionMode;
 }
 
+export type OperationKind = "create" | "retry" | "clarify" | "update";
+
+export type OperationState =
+  | "waiting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "interrupted";
+
+/** The saved-request view. It never carries selected text or a full document. */
+export interface OperationSummary {
+  receipt: string;
+  guide_id: string;
+  order: number;
+  kind: OperationKind;
+  state: OperationState;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  retry_available: boolean;
+  error: string | null;
+}
+
+/** One row of the queue panel: a request plus how far it has come. */
+export interface QueueRow extends OperationSummary {
+  guide_name: string;
+  activity: string | null;
+  attempt: number;
+  lines: number;
+  characters: number;
+  last_output_at: string | null;
+  retry_available: boolean;
+}
+
+export interface QueueSummary {
+  service_start: string;
+  change_number: number;
+  accepting: boolean;
+  closing: boolean;
+  operations: QueueRow[];
+}
+
+export interface CloseStatus {
+  active: number;
+  waiting: number;
+  accepting: boolean;
+  confirmed: boolean;
+}
+
 export interface GuideView {
   kind?: "guide";
   guide_id: string;
@@ -91,6 +140,8 @@ export interface GuideView {
   source?: SourceView | null;
   source_error?: string;
   artifact_url: string | null;
+  operation?: QueueRow | null;
+  retryable_request?: OperationSummary | null;
 }
 
 export type GuideSummary = GuideView & { source: SourceView | null };
@@ -125,6 +176,17 @@ export function artifactUrl(base: string, guideId: string, download: boolean): s
   return download ? `${path}?download=1` : path;
 }
 
+/** A refusal the service actually answered, as opposed to a lost connection. */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function json<T>(response: Response): Promise<T> {
   if (response.ok) return (await response.json()) as T;
 
@@ -145,8 +207,10 @@ async function json<T>(response: Response): Promise<T> {
   } catch {
     // Keep the status-based message when the response is not JSON.
   }
-  throw new Error(detail);
+  throw new ApiError(detail, response.status);
 }
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
 
 function apiOrigin(base: string): string {
   return base.replace(/\/+$/, "");
@@ -180,12 +244,16 @@ export function createApi(base: string) {
       );
     },
 
-    async createGuide(sourceId: string, selection: GuideSelection): Promise<GuideView> {
+    async createGuide(
+      sourceId: string,
+      selection: GuideSelection,
+      receipt: string,
+    ): Promise<GuideView> {
       return json<GuideView>(
         await fetch(`${origin}/api/guides`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ source_id: sourceId, selection }),
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ source_id: sourceId, selection, receipt }),
         }),
       );
     },
@@ -200,29 +268,75 @@ export function createApi(base: string) {
       return json<HistoryEntry[]>(await fetch(`${origin}/api/guides`));
     },
 
-    async generateGuide(guideId: string): Promise<GuideView> {
+    async generateGuide(guideId: string, receipt: string): Promise<GuideView> {
       return json<GuideView>(
         await fetch(`${origin}/api/guides/${encodeURIComponent(guideId)}/generate`, {
           method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ receipt }),
         }),
       );
     },
 
-    async reviseGuide(guideId: string, request: RevisionRequest): Promise<GuideView> {
+    async reviseGuide(
+      guideId: string,
+      request: RevisionRequest,
+      receipt: string,
+    ): Promise<GuideView> {
       return json<GuideView>(
         await fetch(`${origin}/api/guides/${encodeURIComponent(guideId)}/revisions`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(request),
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ ...request, receipt }),
         }),
       );
     },
 
-    async retryGuide(guideId: string): Promise<GuideView> {
+    async retryGuide(guideId: string, receipt: string): Promise<GuideView> {
       return json<GuideView>(
         await fetch(`${origin}/api/guides/${encodeURIComponent(guideId)}/retry`, {
           method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ receipt }),
         }),
+      );
+    },
+
+    async retryOperation(receipt: string, newReceipt: string): Promise<GuideView> {
+      return json<GuideView>(
+        await fetch(`${origin}/api/operations/${encodeURIComponent(receipt)}/retry`, {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ receipt: newReceipt }),
+        }),
+      );
+    },
+
+    async getQueue(): Promise<QueueSummary> {
+      return json<QueueSummary>(await fetch(`${origin}/api/queue`));
+    },
+
+    async getOperation(receipt: string): Promise<QueueRow> {
+      return json<QueueRow>(
+        await fetch(`${origin}/api/operations/${encodeURIComponent(receipt)}`),
+      );
+    },
+
+    async prepareClose(): Promise<CloseStatus> {
+      return json<CloseStatus>(
+        await fetch(`${origin}/api/shutdown/prepare`, { method: "POST" }),
+      );
+    },
+
+    async resumeClose(): Promise<CloseStatus> {
+      return json<CloseStatus>(
+        await fetch(`${origin}/api/shutdown/resume`, { method: "POST" }),
+      );
+    },
+
+    async confirmClose(): Promise<CloseStatus> {
+      return json<CloseStatus>(
+        await fetch(`${origin}/api/shutdown/confirm`, { method: "POST" }),
       );
     },
 
@@ -230,7 +344,7 @@ export function createApi(base: string) {
       return json<GuideView>(
         await fetch(`${origin}/api/guides/${encodeURIComponent(guideId)}`, {
           method: "PATCH",
-          headers: { "Content-Type": "application/json" },
+          headers: JSON_HEADERS,
           body: JSON.stringify({ name }),
         }),
       );
@@ -249,3 +363,5 @@ export function createApi(base: string) {
     },
   };
 }
+
+export type Api = ReturnType<typeof createApi>;

@@ -5,6 +5,12 @@ import { fileURLToPath } from "node:url";
 
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 
+import {
+  createCloseGuard,
+  type CloseGuard,
+  type CloseStatus,
+  type CloseWarning,
+} from "./closeGuard.js";
 import { waitForPort } from "./handshake.js";
 
 const desktopDir = path.dirname(fileURLToPath(import.meta.url));
@@ -17,7 +23,11 @@ let backendStartPromise: Promise<number> | null = null;
 let backendStopPromise: Promise<boolean> | null = null;
 let backendStopFailed = false;
 let registeredBridgeWindow: BrowserWindow | null = null;
-let shutdownPromise: Promise<boolean> | null = null;
+let closeApproved = false;
+let closeGuard: CloseGuard | null = null;
+let submissionsFrozen = false;
+let nextSubmissionToken = 1;
+const openSubmissions = new Set<number>();
 
 function waitForProcessClose(child: ChildProcess): Promise<boolean> {
   return new Promise((resolve) => {
@@ -235,17 +245,69 @@ function stopBackend(): Promise<boolean> {
   return backendStopPromise;
 }
 
-function requestShutdown(): void {
-  if (shutdownPromise !== null) return;
-  shutdownPromise = stopBackend().then((stopped) => {
-    if (!stopped) {
-      shutdownPromise = null;
-      dialog.showErrorBox("Study Forge", BACKEND_STOP_FAILURE_MESSAGE);
-      return false;
-    }
-    app.quit();
-    return true;
+function activeWindow(): BrowserWindow | null {
+  const window = registeredBridgeWindow;
+  if (window === null || window.isDestroyed()) return null;
+  return window;
+}
+
+async function serviceCloseStatus(action: "prepare" | "resume" | "confirm"): Promise<CloseStatus> {
+  const port = backendPort;
+  if (port === null) throw new Error("the study service is not running");
+  const response = await fetch(`http://127.0.0.1:${port}/api/shutdown/${action}`, {
+    method: "POST",
   });
+  if (!response.ok) {
+    throw new Error(`the study service answered ${response.status}`);
+  }
+  return (await response.json()) as CloseStatus;
+}
+
+async function askToQuit(warning: CloseWarning): Promise<boolean> {
+  const options = {
+    type: "warning" as const,
+    buttons: ["Keep app open", "Quit and stop work"],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+    title: "Study Forge",
+    message: warning.message,
+    detail: warning.detail,
+  };
+  const window = activeWindow();
+  const result =
+    window === null
+      ? await dialog.showMessageBox(options)
+      : await dialog.showMessageBox(window, options);
+  // Keeping the app open is the safe default: only the second button quits.
+  return result.response === 1;
+}
+
+function closeGuardInstance(): CloseGuard {
+  if (closeGuard !== null) return closeGuard;
+  closeGuard = createCloseGuard({
+    prepare: () => serviceCloseStatus("prepare"),
+    resume: () => serviceCloseStatus("resume"),
+    confirm: () => serviceCloseStatus("confirm"),
+    warn: askToQuit,
+    setSubmissionsFrozen: (frozen) => {
+      submissionsFrozen = frozen;
+    },
+    pendingSubmissions: () => openSubmissions.size,
+    serviceMaybeRunning: () => backendPort !== null || backend !== null,
+    stopBackend: () => stopBackend(),
+    reportStopFailure: () => dialog.showErrorBox("Study Forge", BACKEND_STOP_FAILURE_MESSAGE),
+    quit: () => {
+      closeApproved = true;
+      app.quit();
+    },
+  });
+  return closeGuard;
+}
+
+/** One decision for the close button, Alt+F4, and app quit. */
+async function attemptClose(): Promise<boolean> {
+  return await closeGuardInstance().requestClose();
 }
 
 function errorMessage(error: unknown): string {
@@ -282,6 +344,16 @@ export function registerNativeBridge(window: BrowserWindow): void {
   ipcMain.handle("window:is-maximized", () => window.isMaximized());
   ipcMain.handle("window:close", () => {
     window.close();
+  });
+  ipcMain.handle("submission:begin", () => {
+    if (submissionsFrozen) return null;
+    const token = nextSubmissionToken;
+    nextSubmissionToken += 1;
+    openSubmissions.add(token);
+    return token;
+  });
+  ipcMain.handle("submission:end", (_event, token: unknown) => {
+    if (typeof token === "number") openSubmissions.delete(token);
   });
   const notifyMaximizedChanged = (): void => {
     if (window.isDestroyed()) return;
@@ -327,6 +399,12 @@ export async function loadMainWindow(): Promise<BrowserWindow> {
   });
 
   registerNativeBridge(window);
+  window.on("close", (event) => {
+    // The final, already-approved pass closes for real.
+    if (closeApproved) return;
+    event.preventDefault();
+    void attemptClose();
+  });
   await window.loadFile(path.join(desktopDir, "..", "renderer", "index.html"));
   window.show?.();
   window.focus?.();
@@ -343,11 +421,13 @@ app.whenReady().then(async () => {
 });
 
 app.on("before-quit", (event) => {
-  if (shutdownPromise !== null) return;
+  if (closeApproved) return;
   event.preventDefault();
-  requestShutdown();
+  void attemptClose();
 });
-app.on("window-all-closed", requestShutdown);
+app.on("window-all-closed", () => {
+  app.quit();
+});
 process.on("exit", () => {
   const child = backend;
   if (child !== null) stopBackendDuringExit(child);

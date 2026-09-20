@@ -1,8 +1,10 @@
 from pathlib import Path
+from threading import Event
 
 import pytest
 
 from backend.fonts.embed import inject_fonts
+from backend.generate.progress import ProgressReporter, count_document_lines
 from backend.generate.unit import (
     MAX_CALLS,
     MAX_TOOL_TURNS,
@@ -31,9 +33,12 @@ class ScriptedLLM:
         self._replies = list(replies)
         self.seen: list[list[dict]] = []
 
-    def complete(self, messages, tools=None) -> LLMReply:
+    def complete(self, messages, tools=None, *, on_text=None, stop=None) -> LLMReply:
         self.seen.append(list(messages))
-        return self._replies.pop(0)
+        reply = self._replies.pop(0)
+        if on_text is not None:
+            on_text(reply.text)
+        return reply
 
 
 def _request(tmp_path: Path, numbers=(1, 2)) -> UnitRequest:
@@ -139,7 +144,7 @@ def test_transient_retries_consume_the_remaining_call_budget(tmp_path: Path, mon
     waits: list[float] = []
 
     class AlwaysTransientLLM:
-        def complete(self, messages, tools=None) -> LLMReply:
+        def complete(self, messages, tools=None, *, on_text=None, stop=None) -> LLMReply:
             raise LLMError("temporary", retryable=True)
 
     monkeypatch.setattr("backend.generate.unit.time.sleep", waits.append)
@@ -592,6 +597,191 @@ def test_truncated_document_is_reported_as_truncation(tmp_path: Path) -> None:
     assert "output budget mid-document" in repair_prompt
     assert "incomplete" in repair_prompt
     assert "46000" in repair_prompt
+
+
+class ProgressRecorder:
+    """Captures the activity, attempt, and counts shown to the screen."""
+
+    def __init__(self) -> None:
+        self.seen: list[tuple[str, int, int]] = []
+        self.reporter = ProgressReporter(on_change=self.record)
+
+    def record(self) -> None:
+        state = self.reporter.snapshot()
+        self.seen.append((state.activity, state.attempt, state.lines))
+
+    @property
+    def activities(self) -> list[str]:
+        return [activity for activity, _attempt, _lines in self.seen]
+
+    def collapsed_activities(self) -> list[str]:
+        collapsed: list[str] = []
+        for activity in self.activities:
+            if not collapsed or collapsed[-1] != activity:
+                collapsed.append(activity)
+        return collapsed
+
+
+def test_progress_reports_real_activity_and_labelled_attempts(tmp_path: Path) -> None:
+    reference_turn = LLMReply(
+        text="",
+        tool_calls=[ToolCall("call_1", "read_reference", '{"name":"type-process.md"}')],
+    )
+    llm = ScriptedLLM([reference_turn, LLMReply(text=BROKEN), LLMReply(text=GOOD)])
+    recorder = ProgressRecorder()
+
+    result = generate_unit(
+        _request(tmp_path),
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        out_dir=tmp_path / "out",
+        progress=recorder.reporter,
+    )
+
+    assert result.status is UnitStatus.OK
+    assert recorder.collapsed_activities() == [
+        "preparing",
+        "waiting",
+        "references",
+        "waiting",
+        "writing",
+        "checking",
+        "correcting",
+        "waiting",
+        "writing",
+        "checking",
+    ]
+    attempts = [attempt for _activity, attempt, _lines in recorder.seen]
+    assert attempts == sorted(attempts)
+    assert max(attempts) == 3
+    reference_lines = [
+        lines for activity, _attempt, lines in recorder.seen if activity == "references"
+    ]
+    assert set(reference_lines) == {0}
+    assert recorder.seen[-1] == ("checking", 3, count_document_lines(GOOD))
+    assert len(llm.seen) == 3
+    assert result.calls == 3
+
+
+def test_a_tool_only_turn_leaves_no_document_count_behind(tmp_path: Path) -> None:
+    reference_turn = LLMReply(
+        text="",
+        tool_calls=[ToolCall("call_1", "read_reference", '{"name":"type-process.md"}')],
+    )
+    llm = ScriptedLLM([reference_turn, LLMReply(text=GOOD)])
+    recorder = ProgressRecorder()
+
+    result = generate_unit(
+        _request(tmp_path),
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        out_dir=tmp_path / "out",
+        progress=recorder.reporter,
+    )
+
+    assert result.status is UnitStatus.OK
+    assert "references" in recorder.collapsed_activities()
+    writing_lines = [
+        lines for activity, _attempt, lines in recorder.seen if activity == "writing"
+    ]
+    assert writing_lines == [count_document_lines(GOOD)]
+
+
+def test_a_retried_network_failure_starts_a_labelled_new_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("backend.generate.unit.time.sleep", lambda _seconds: None)
+
+    class FlakyLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, messages, tools=None, *, on_text=None, stop=None) -> LLMReply:
+            self.calls += 1
+            if self.calls == 1:
+                raise LLMError("temporary network failure", retryable=True)
+            if on_text is not None:
+                on_text(GOOD)
+            return LLMReply(text=GOOD)
+
+    llm = FlakyLLM()
+    recorder = ProgressRecorder()
+
+    result = generate_unit(
+        _request(tmp_path),
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        out_dir=tmp_path / "out",
+        progress=recorder.reporter,
+    )
+
+    assert result.status is UnitStatus.OK
+    assert recorder.collapsed_activities() == [
+        "preparing",
+        "waiting",
+        "retry",
+        "waiting",
+        "writing",
+        "checking",
+    ]
+    assert recorder.seen[-1] == ("checking", 2, count_document_lines(GOOD))
+
+
+def test_a_stopped_request_neither_calls_the_model_nor_publishes(tmp_path: Path) -> None:
+    stop = Event()
+    stop.set()
+    llm = ScriptedLLM([LLMReply(text=GOOD)])
+
+    result = generate_unit(
+        _request(tmp_path),
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        out_dir=tmp_path / "out",
+        stop=stop,
+    )
+
+    assert result.status is UnitStatus.FAILED
+    assert result.artifact_path is None
+    assert "stopped" in "; ".join(result.findings).lower()
+    assert llm.seen == []
+    assert not (tmp_path / "out" / "units" / "unit-1" / "artifact.html").exists()
+
+
+def test_a_stop_while_a_candidate_is_unverified_discards_it(tmp_path: Path) -> None:
+    stop = Event()
+
+    class StoppingLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, messages, tools=None, *, on_text=None, stop=None) -> LLMReply:
+            self.calls += 1
+            if on_text is not None:
+                on_text(BROKEN)
+            stop_event.set()
+            return LLMReply(text=BROKEN)
+
+    stop_event = stop
+    llm = StoppingLLM()
+
+    result = generate_unit(
+        _request(tmp_path),
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        out_dir=tmp_path / "out",
+        stop=stop_event,
+    )
+
+    assert llm.calls == 1
+    assert result.status is UnitStatus.FAILED
+    assert result.artifact_path is None
+    assert "stopped" in "; ".join(result.findings).lower()
+    assert not (tmp_path / "out" / "units" / "unit-1" / "artifact.html").exists()
 
 
 def test_reference_lookups_do_not_consume_the_generation_attempts(tmp_path: Path) -> None:

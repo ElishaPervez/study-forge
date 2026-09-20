@@ -25,6 +25,8 @@ function loadBuiltBridge(): {
   toggleMaximizeWindow: () => Promise<void>;
   isWindowMaximized: () => Promise<boolean>;
   closeWindow: () => Promise<void>;
+  beginSubmission: () => Promise<number | null>;
+  endSubmission: (token: number) => Promise<void>;
   onWindowMaximizedChange: (callback: (maximized: boolean) => void) => () => void;
 } {
   const source = readFileSync(preloadPath, "utf8");
@@ -94,6 +96,23 @@ describe("Electron preload build", () => {
     const bytes = new Uint8Array([0, 255, 12]).buffer;
     await bridge.saveArtifact("guide.html", bytes);
     expect(electronFakes.invoke).toHaveBeenLastCalledWith("artifact:save", "guide.html", bytes);
+  });
+
+  it("exposes the submission handshake so a quit can wait for it", async () => {
+    electronFakes.invoke.mockReset();
+    const bridge = loadBuiltBridge();
+    expect(bridge).toBeDefined();
+    expect(typeof bridge.beginSubmission).toBe("function");
+    expect(typeof bridge.endSubmission).toBe("function");
+
+    electronFakes.invoke.mockResolvedValueOnce(null).mockResolvedValueOnce(undefined);
+    await expect(bridge.beginSubmission()).resolves.toBeNull();
+    await bridge.endSubmission(7);
+    expect(electronFakes.invoke).toHaveBeenNthCalledWith(1, "submission:begin");
+    expect(electronFakes.invoke).toHaveBeenNthCalledWith(2, "submission:end", 7);
+
+    electronFakes.invoke.mockResolvedValueOnce(3);
+    await expect(bridge.beginSubmission()).resolves.toBe(3);
   });
 
   it("exposes whitelisted window controls through IPC", async () => {

@@ -53,13 +53,18 @@ backend/            Python service (FastAPI + pydantic + latex2mathml)
   api/              app.py (all routes), __main__.py (uvicorn + port announcement)
   ingest/pdf.py     PDF rasterisation/caching, image normalisation, page previews
   ingest/source.py  content-addressed source store + stored-source validation
-  jobs/schema.py    SourceAsset / GuideRecord / LegacyHistoryEntry, selection types, path safety
-  jobs/store.py     atomic JSON persistence, guide CRUD, history, interruption recovery
+  jobs/schema.py    SourceAsset / GuideRecord / OperationRecord / LegacyHistoryEntry, path safety
+  jobs/store.py     atomic JSON persistence, guide CRUD, history
+  jobs/operations.py  saved request records, safe publication, recovery on next read
+  jobs/queue.py     the single guide queue: admission, one worker, close decisions
   generate/unit.py  the generation loop, output policy, repair, artifact publication
   generate/guide.py wraps unit generation; derives the guide name from <title>
   generate/revision.py  selection-scoped revision using the same loop and checks
+  generate/runner.py    runs one accepted queue request against a guide
+  generate/progress.py  live line/character counts and activity labels while writing
   prompt/build.py   output policy text, initial/unit/revision messages, title extraction
   llm/client.py     OpenRouter chat client (tool calls, usage, finish reason)
+  llm/stream.py     incremental SSE parsing that feeds progress as text arrives
   skill/bundle.py   SKILL.md + style-guide.md + study-guide.md -> system prompt
   skill/manifest.py reference manifest from references/*.md
   verify/self_check.py  runs the skill's shipped self_check.py over a candidate artifact
@@ -70,9 +75,11 @@ desktop/            Electron shell + React renderer (TypeScript, Vite)
   src/main.ts       backend lifecycle, IPC handlers, window creation
   src/preload.cts   contextBridge surface exposed as window.studyForge
   src/handshake.ts  STUDY_FORGE_PORT parser with timeout/exit handling
-  renderer/src/     App.tsx orchestration, api.ts HTTP client, useGlobalFileDrop, inAppDrag
+  src/closeGuard.ts one close decision for the close button, Alt+F4, and app quit
+  renderer/src/     App.tsx orchestration, api.ts HTTP client, useGlobalFileDrop, inAppDrag,
+                    useGenerationQueue (queue + submission handshakes)
   renderer/src/components/  SourceIntake, SourceViewer, PdfRangeSelector, RangeEditor,
-                            ImageGroupEditor, HistoryList, HistoryContextMenu,
+                            ImageGroupEditor, HistoryList, HistoryContextMenu, GenerationQueue,
                             CustomDropdown, GuideCard, RevisionPopup, UnitCard, WindowControls
 
 diagram-design/     vendored design-system skill (SKILL.md, references/, assets/, scripts/)
@@ -112,10 +119,32 @@ provider's request-body limit. The viewer uses a separate `previews/` cache from
 - Replies are sliced down to the document itself (`_strip_fences`), fonts are injected, and the
   artifact is written atomically *before* verification so a failed run still leaves its output
   inspectable (published artifacts are exposed only for `ok`).
+- Replies stream: each SSE chunk updates the progress reporter's line and character counts and
+  its activity label (`reading references`, `writing`, `verifying`), without changing what the
+  final artifact contains.
 - Statuses: `pending -> running -> verifying -> (repairing) -> ok | needs-attention | failed`;
   `needs-attention` means an artifact exists but a check failed.
-- Guides left `pending/running/verifying/repairing` by a previous process are marked `failed`
-  with a retry message on the next read (`recover_interrupted_guides`).
+
+**Guide queue** (`backend/jobs/queue.py`, `backend/jobs/operations.py`) is the single place where
+work runs. Every request - Forge, Retry, Clarify, Update, or a retry of an earlier failure - is
+recorded as an `OperationRecord` under `jobs/operations/<receipt>.json` before it is accepted,
+and one worker thread advances them in order, exactly one at a time:
+
+- `POST /api/guides` and the other submission routes answer `202` with `{guide, operation}`. The
+  receipt is the only way to repeat a request safely: an identical receipt returns the same
+  record instead of starting a second run.
+- Admission is toggled by the close decision. While closing, new requests are refused (409)
+  rather than started, and the queue stops handing work to the worker.
+- Publication is atomic and fingerprinted: a completed artifact is written to a versioned file
+  with its recorded fingerprint, then swapped into place, so a crash mid-publication cannot mix
+  old and new state. A guide is only served as verified when the fingerprint still matches.
+- `recover_operations` runs on the next read: requests left active by a killed process become
+  `interrupted`, keep pointing at the same guide, and stay retryable at the back of the queue
+  only when the user asks. A failed or interrupted Update leaves the last good artifact intact.
+- A busy guide can be opened but not changed: the routes reject rename, delete, generate,
+  retry, and revision for a guide whose request is active (`GuideBusyError` -> 409).
+- `GET /api/queue` returns rows with state, order, guide name, activity, line/character counts,
+  and last-output time; the renderer polls it faster while work is moving.
 
 **Math** (`backend/mathml/render.py`) is rendered at build time, never at view time. The model
 writes LaTeX between `\(...\)` (inline) and `\[...\]` (display), and generation rewrites those
@@ -154,21 +183,32 @@ referencing it is deleted, so deleting the user's original file never breaks a s
 | GET | `/api/sources/{id}/pages/{n}` | Rendered PDF page JPEG (PDF sources only) |
 | GET | `/api/sources/{id}/images/{n}` | Stored image response (image sources only) |
 | DELETE | `/api/sources/{id}` | Delete the stored source, or retain it when a guide still references it |
-| POST | `/api/guides` | Create a guide for a source + selection |
+| POST | `/api/guides` | Queue a guide for a source + selection (202, `{guide, operation}`) |
 | GET | `/api/guides` | History (guides newest-first, plus legacy entries) |
 | GET | `/api/guides/{id}` | One guide with its source and `artifact_url` |
-| POST | `/api/guides/{id}/generate` | Run generation (409 unless pending) |
-| POST | `/api/guides/{id}/retry` | Re-run generation (409 unless failed/needs-attention) |
-| POST | `/api/guides/{id}/revisions` | Revise a passage (`clarify` or `custom`) |
+| POST | `/api/guides/{id}/generate` | Queue generation (202; 409 when busy or already accepted) |
+| POST | `/api/guides/{id}/retry` | Queue a retry for a failed/interrupted guide (202) |
+| POST | `/api/guides/{id}/revisions` | Queue a revision (`clarify` or `custom`) (202) |
 | PATCH | `/api/guides/{id}` | Rename |
 | DELETE | `/api/guides/{id}` | Delete a guide (and its source when unreferenced) |
 | GET | `/api/guides/{id}/artifact.html` | Serve the artifact inline, or as an attachment with `?download=1` |
+| GET | `/api/queue` | Queue snapshot: rows, states, progress, and last-output time |
+| GET | `/api/operations/{receipt}` | One saved request record (used to confirm a lost reply) |
+| POST | `/api/operations/{receipt}/retry` | Queue an interrupted request again under a new receipt (202) |
+| POST | `/api/shutdown/prepare` | Pause admission and report what is active/waiting |
+| POST | `/api/shutdown/resume` | Restore admission after the user keeps the app open |
+| POST | `/api/shutdown/confirm` | Record a confirmed quit so nothing publishes afterwards |
 
-Per-guide locks serialise generation, revision, rename, and delete; a separate lock guards
-source registration/removal. Selection is `{mode: "all"}`, `{mode: "custom", start, end}` for
-PDFs, or `{mode: "images"}`. Unreadable stored sources return a fixed recovery message (404)
-so the UI can prompt for a re-pick instead of showing a raw parser error, and generation
-failures are always persisted as guide state rather than lost with the request.
+Request bodies for submissions carry a client-generated `receipt`, which makes a repeated
+request idempotent. Queue and shutdown replies are plain counters and booleans so the native
+close decision never has to parse an error shape.
+
+Generation, revision, rename, and delete are serialised per guide, and the queue runs only one
+request at a time overall; a separate lock guards source registration/removal. Selection is
+`{mode: "all"}`, `{mode: "custom", start, end}` for PDFs, or `{mode: "images"}`. Unreadable
+stored sources return a fixed recovery message (404) so the UI can prompt for a re-pick instead
+of showing a raw parser error, and generation failures are always persisted as guide state
+rather than lost with the request.
 
 ## Desktop app
 
@@ -191,7 +231,21 @@ any non-null value locks source controls). Notable behaviours:
 - **Source viewer**: PDF pages and image thumbnails are served by the backend; right-clicking a
   page offers "set as first/last page" for the range selection.
 - **History**: newest-first; a ready guide opens on plain click, failed ones expose Retry and
-  Delete through a keyboard-navigable context menu (`Shift+F10` / context-menu key).
+  Delete through a keyboard-navigable context menu (`Shift+F10` / context-menu key). A guide with
+  work in the queue opens read-only, with its editing actions disabled instead of hidden.
+- **Queue panel**: a collapsible panel in the bottom-right corner lists every request - waiting,
+  running, interrupted, and recently finished - with its state, live line/character counts,
+  activity label, and last-output time. Forge, Retry, Clarify, and Update all submit through
+  `useGenerationQueue`, which owns the request receipts, polls `/api/queue`, and keeps a guide
+  locked as busy until the service reports it stopped. A finished request never changes the open
+  guide or the source draft in progress.
+- **Quit protection**: `desktop/src/closeGuard.ts` gives the close button, Alt+F4, and app quit
+  one decision. It freezes new submission handshakes, asks the service to pause admission, and - if
+  anything is active, waiting, or still being submitted - shows a native warning with "Keep app
+  open" as the safe default. Staying resumes admission and submissions; quitting confirms the stop
+  at the service, then uses the existing bounded process-tree kill. If the service cannot answer,
+  the warning says so instead of assuming an empty queue. Interrupted work stays in History and is
+  only restarted when the user asks for it.
 
 ## Setup
 
@@ -224,9 +278,9 @@ main process with `taskkill //PID <pid> //T //F`.
 ## Tests and lint
 
 ```bash
-uv run pytest -q            # 253 backend tests
+uv run pytest -q            # 345 backend tests
 uv run ruff check .         # line-length 100
-cd desktop && npm test      # builds, then vitest (169 tests)
+cd desktop && npm test      # builds, then vitest (217 tests)
 cd desktop && npm run build # tsc for main/preload/renderer, then vite bundle
 ```
 
@@ -234,7 +288,8 @@ Backend tests mirror the modules (`tests/api`, `tests/generate`, `tests/ingest`,
 `tests/llm`, `tests/prompt`, `tests/skill`, `tests/verify`, `tests/fonts`, `tests/mathml`) and drive the app
 through `fastapi.testclient` with a scripted LLM and `httpx.MockTransport`, so no network or API
 key is needed. Renderer tests cover the extracted pure helpers (placement, clamping, filename
-sanitising, drop-session state, export flow) alongside component-render assertions.
+sanitising, drop-session state, export flow), the queue hook, the queue panel, and the close
+warning, alongside component-render assertions.
 
 ## Conventions and limits
 

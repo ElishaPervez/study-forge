@@ -8,6 +8,7 @@ from PIL import Image
 from backend.api.app import create_app
 from backend.llm.client import LLMReply
 from backend.settings import Settings
+from tests.api.helpers import add_guide, track
 
 SKILL_DIR = Path("diagram-design")
 GOOD = (SKILL_DIR / "assets" / "template.html").read_text(encoding="utf-8")
@@ -18,11 +19,13 @@ class QueueLLM:
         self.replies = list(replies or [])
         self.seen: list[list[dict]] = []
 
-    def complete(self, messages, tools=None) -> LLMReply:
+    def complete(self, messages, tools=None, *, on_text=None, stop=None) -> LLMReply:
         self.seen.append(list(messages))
         reply = self.replies.pop(0)
         if isinstance(reply, BaseException):
             raise reply
+        if on_text is not None:
+            on_text(reply.text)
         return reply
 
 
@@ -48,7 +51,7 @@ def client(tmp_path: Path) -> TestClient:
     app.state.source_pdf = pdf
     app.state.source_image = tmp_path / "page.png"
     Image.new("RGB", (2, 2), (25, 75, 125)).save(app.state.source_image, format="PNG")
-    return TestClient(app)
+    return track(TestClient(app))
 
 
 def test_source_registration_reuses_storage_and_reports_current_files(
@@ -105,10 +108,7 @@ def test_source_delete_removes_unreferenced_source_and_keeps_referenced_source(
     source = client.post(
         "/api/sources", json={"paths": [str(client.app.state.source_image)]}
     ).json()
-    guide = client.post(
-        "/api/guides",
-        json={"source_id": source["source_id"], "selection": {"mode": "images"}},
-    ).json()
+    guide = add_guide(client, source["source_id"], {"mode": "images"})
 
     retained = client.delete(f"/api/sources/{source['source_id']}")
 

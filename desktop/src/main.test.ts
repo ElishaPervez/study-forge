@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { BrowserWindow } from "electron";
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const electronFakes = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
@@ -26,20 +26,25 @@ const electronFakes = vi.hoisted(() => {
 
   const maximizedState = { value: false };
   const windowEvents = new Map<string, () => void>();
+  const appEvents = new Map<string, () => void>();
 
   return {
     handlers,
     maximizedState,
     windowEvents,
+    appEvents,
     BrowserWindow: FakeBrowserWindow,
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       handlers.set(channel, handler);
     }),
     showOpenDialog: vi.fn(),
     showSaveDialog: vi.fn(),
+    showMessageBox: vi.fn(),
     writeFile: vi.fn(),
     whenReady: vi.fn(() => new Promise<never>(() => undefined)),
-    on: vi.fn(),
+    on: vi.fn((event: string, listener: () => void) => {
+      appEvents.set(event, listener);
+    }),
     quit: vi.fn(),
   };
 });
@@ -60,6 +65,7 @@ vi.mock("electron", () => ({
   dialog: {
     showOpenDialog: electronFakes.showOpenDialog,
     showSaveDialog: electronFakes.showSaveDialog,
+    showMessageBox: electronFakes.showMessageBox,
     showErrorBox: vi.fn(),
   },
   ipcMain: {
@@ -377,4 +383,194 @@ describe("native Electron bridge handlers", () => {
     }
   });
 
+});
+
+type CloseEvent = { preventDefault: () => void };
+
+describe("close protection", () => {
+  beforeEach(() => {
+    electronFakes.handlers.clear();
+    electronFakes.BrowserWindow.instances.length = 0;
+    electronFakes.windowEvents.clear();
+    electronFakes.appEvents.clear();
+    electronFakes.handle.mockClear();
+    electronFakes.showMessageBox.mockReset();
+    electronFakes.showMessageBox.mockResolvedValue({ response: 0 });
+    electronFakes.quit.mockClear();
+    processFakes.spawn.mockReset();
+    processFakes.execFileSync.mockReset();
+    processFakes.waitForPort.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function freshMain(): Promise<typeof import("./main")> {
+    vi.resetModules();
+    return await import("./main");
+  }
+
+  function closeListener(): ((event: CloseEvent) => void) | undefined {
+    return electronFakes.windowEvents.get("close") as unknown as
+      | ((event: CloseEvent) => void)
+      | undefined;
+  }
+
+  it("pairs every submission handshake with a matching end", async () => {
+    const mod = await freshMain();
+    await mod.loadMainWindow();
+
+    const first = handler("submission:begin")({});
+    const second = handler("submission:begin")({});
+    expect(typeof first).toBe("number");
+    expect(typeof second).toBe("number");
+    expect(second).not.toBe(first);
+
+    handler("submission:end")({}, first);
+    handler("submission:end")({}, second);
+  });
+
+  it("closes quietly and refuses new submissions when nothing is unresolved", async () => {
+    const mod = await freshMain();
+    await mod.loadMainWindow();
+
+    const event: CloseEvent = { preventDefault: vi.fn() };
+    closeListener()?.(event);
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(electronFakes.quit).toHaveBeenCalledTimes(1));
+    expect(electronFakes.showMessageBox).not.toHaveBeenCalled();
+    // Once quitting is confirmed, no new submission may start.
+    expect(handler("submission:begin")({})).toBeNull();
+  });
+
+  it("warns about an unresolved submission and restores it when the user stays", async () => {
+    const mod = await freshMain();
+    await mod.loadMainWindow();
+    const token = handler("submission:begin")({});
+    expect(typeof token).toBe("number");
+
+    const event: CloseEvent = { preventDefault: vi.fn() };
+    closeListener()?.(event);
+
+    await vi.waitFor(() => expect(electronFakes.showMessageBox).toHaveBeenCalledTimes(1));
+    const options = electronFakes.showMessageBox.mock.calls[0]?.[1] as {
+      buttons?: string[];
+      defaultId?: number;
+    };
+    expect(options.buttons).toEqual(["Keep app open", "Quit and stop work"]);
+    // Keeping the app open is the safe default.
+    expect(options.defaultId).toBe(0);
+    expect(electronFakes.quit).not.toHaveBeenCalled();
+
+    // Staying reopens submissions and stops the handshake that was unresolved.
+    expect(handler("submission:begin")({})).not.toBeNull();
+    handler("submission:end")({}, token);
+  });
+
+  it("prompts once when the close gesture is repeated", async () => {
+    const mod = await freshMain();
+    await mod.loadMainWindow();
+    handler("submission:begin")({});
+
+    let release: (value: { response: number }) => void = () => undefined;
+    electronFakes.showMessageBox.mockImplementation(
+      () => new Promise<{ response: number }>((resolve) => {
+        release = resolve;
+      }),
+    );
+    const listener = closeListener();
+    const first: CloseEvent = { preventDefault: vi.fn() };
+    const second: CloseEvent = { preventDefault: vi.fn() };
+    listener?.(first);
+    await vi.waitFor(() => expect(electronFakes.showMessageBox).toHaveBeenCalledTimes(1));
+    listener?.(second);
+
+    expect(second.preventDefault).toHaveBeenCalledTimes(1);
+    expect(electronFakes.showMessageBox).toHaveBeenCalledTimes(1);
+
+    release({ response: 0 });
+    await vi.waitFor(() => expect(handler("submission:begin")({})).not.toBeNull());
+    expect(electronFakes.quit).not.toHaveBeenCalled();
+  });
+
+  it("uses the same decision for app quit as for the window close button", async () => {
+    const mod = await freshMain();
+    await mod.loadMainWindow();
+    handler("submission:begin")({});
+
+    const beforeQuit = electronFakes.appEvents.get("before-quit") as unknown as
+      | ((event: CloseEvent) => void)
+      | undefined;
+    expect(beforeQuit).toBeDefined();
+    const event: CloseEvent = { preventDefault: vi.fn() };
+    beforeQuit?.(event);
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(electronFakes.showMessageBox).toHaveBeenCalledTimes(1));
+  });
+
+  it("stops work and quits when the user confirms quitting", async () => {
+    const mod = await freshMain();
+    await mod.loadMainWindow();
+    handler("submission:begin")({});
+    electronFakes.showMessageBox.mockResolvedValue({ response: 1 });
+
+    const event: CloseEvent = { preventDefault: vi.fn() };
+    closeListener()?.(event);
+
+    await vi.waitFor(() => expect(electronFakes.quit).toHaveBeenCalledTimes(1));
+    expect(handler("submission:begin")({})).toBeNull();
+  });
+
+  it("keeps the app open and reports failure when the service process will not stop", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      killed: false,
+      pid: 4321,
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn(() => false),
+    });
+    const terminator = new EventEmitter();
+    processFakes.spawn.mockImplementation((command: string) =>
+      command === "taskkill" ? terminator : child,
+    );
+    processFakes.waitForPort.mockResolvedValue(4321);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          active: 1,
+          waiting: 0,
+          accepting: false,
+          confirmed: false,
+        }),
+      })),
+    );
+
+    vi.useFakeTimers();
+    try {
+      const mod = await freshMain();
+      await mod.loadMainWindow();
+      await handler("backend:start")({});
+      electronFakes.showMessageBox.mockResolvedValue({ response: 1 });
+
+      const event: CloseEvent = { preventDefault: vi.fn() };
+      closeListener()?.(event);
+      await vi.waitFor(() => expect(electronFakes.showMessageBox).toHaveBeenCalledTimes(1));
+
+      terminator.emit("close", 1);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      // The app must not claim the work stopped when the process survived.
+      expect(electronFakes.quit).not.toHaveBeenCalled();
+      // Staying open means submissions may start again.
+      expect(handler("submission:begin")({})).not.toBeNull();
+      child.emit("close", 1, null);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -24,6 +24,8 @@ export interface HistoryListProps {
   guides: HistoryEntry[];
   activeGuideId?: string | null;
   disabled?: boolean;
+  /** Guides with a request waiting or running: readable, but not changeable. */
+  busyGuideIds?: ReadonlySet<string>;
   onOpen: (guide: GuideSummary) => void | Promise<void>;
   onRename: (guideId: string, name: string) => void | Promise<void>;
   onDelete: (guideId: string) => void | Promise<void>;
@@ -41,12 +43,20 @@ export function resolveSubmittedGuideName(previousName: string, submittedName: s
 }
 
 /**
- * A plain left click on a ready guide opens it, so the card itself is the
- * control. Failed guides stay non-committal - their recovery actions live in
- * the context menu - and a busy rail opens nothing at all.
+ * A plain left click on a modern guide opens it, so the card itself is the
+ * control. A guide with a request waiting or running opens too: its saved state
+ * is readable while the request finishes, and its card has no change menu. The
+ * older incompatible records and a busy rail open nothing at all.
  */
 export function historyItemOpensGuide(status: string, disabled: boolean, editing: boolean): boolean {
-  return !disabled && !editing && status === "ok";
+  if (disabled || editing) return false;
+  return status === "ok"
+    || status === "failed"
+    || status === "needs-attention"
+    || status === "pending"
+    || status === "running"
+    || status === "verifying"
+    || status === "repairing";
 }
 
 function selectionLabel(guide: GuideSummary): string {
@@ -85,6 +95,7 @@ export const HistoryList = memo(function HistoryList({
   guides,
   activeGuideId = null,
   disabled = false,
+  busyGuideIds,
   onOpen,
   onRename,
   onDelete,
@@ -190,9 +201,13 @@ export const HistoryList = memo(function HistoryList({
     else void onRetry(opened.guide.guide_id);
   };
 
+  // A guide that becomes busy loses its change menu and any rename in progress,
+  // so a stale action cannot be chosen after the queue moved on.
   useEffect(() => {
-    if (disabled && menu !== null) setMenu(null);
-  }, [disabled, menu]);
+    const busy = (guideId: string) => busyGuideIds?.has(guideId) ?? false;
+    if (editingGuideId !== null && busy(editingGuideId)) cancelRename();
+    if (menu !== null && (disabled || busy(menu.guide.guide_id))) setMenu(null);
+  }, [disabled, busyGuideIds, editingGuideId, menu]);
 
   return (
     <section className="history-section" ref={sectionRef} aria-labelledby="history-heading">
@@ -219,16 +234,20 @@ export const HistoryList = memo(function HistoryList({
             }
 
             const editing = editingGuideId === guide.guide_id;
-            const menuEntries = editing || disabled ? [] : historyMenuEntries(guide.status);
+            const busy = busyGuideIds?.has(guide.guide_id) ?? false;
+            const menuEntries = editing || disabled || busy
+              ? []
+              : historyMenuEntries(guide.status);
             const canOpenMenu = menuEntries.length > 0;
             const menuOpen = menu?.guide.guide_id === guide.guide_id;
             const canOpen = historyItemOpensGuide(guide.status, disabled, editing);
+            const focusable = canOpen || canOpenMenu;
             return (
               <li
-                className={`history-item${canOpen ? " is-openable" : ""}${activeGuideId === guide.guide_id ? " is-active" : ""}${menuOpen ? " is-menu-open" : ""}`}
+                className={`history-item${canOpen ? " is-openable" : ""}${activeGuideId === guide.guide_id ? " is-active" : ""}${menuOpen ? " is-menu-open" : ""}${busy ? " is-busy" : ""}`}
                 key={guide.guide_id}
                 data-guide-id={guide.guide_id}
-                tabIndex={canOpenMenu ? 0 : undefined}
+                tabIndex={focusable ? 0 : undefined}
                 aria-haspopup={canOpenMenu ? "menu" : undefined}
                 aria-expanded={canOpenMenu ? menuOpen : undefined}
                 aria-keyshortcuts={canOpenMenu ? "Shift+F10" : undefined}
@@ -258,7 +277,7 @@ export const HistoryList = memo(function HistoryList({
 
                 <div className={`history-status status-${statusTone(guide.status)}`}>
                   <span className="status-dot" aria-hidden="true" />
-                  <span>{statusLabel(guide.status)}</span>
+                  <span>{busy ? "Waiting in the queue" : statusLabel(guide.status)}</span>
                 </div>
 
                 {guide.error ? <p className="history-item-error">{guide.error}</p> : null}

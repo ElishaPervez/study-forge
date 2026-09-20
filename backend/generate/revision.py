@@ -5,11 +5,22 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 
 from backend.fonts.embed import inject_fonts
+from backend.generate.progress import (
+    ACTIVITY_CHECKING,
+    ACTIVITY_CORRECTING,
+    ACTIVITY_PREPARING,
+    ACTIVITY_REFERENCES,
+    ACTIVITY_RETRYING,
+    ACTIVITY_WAITING,
+    ProgressReporter,
+)
 from backend.generate.unit import (
     MAX_CALLS,
     MAX_TOOL_TURNS,
+    STOPPED_FINDING,
     _backoff_seconds,
     _empty_reply_finding,
     _empty_reply_prompt,
@@ -19,10 +30,11 @@ from backend.generate.unit import (
     _tools,
     _truncated_reply_finding,
     _v1_output_policy_findings,
+    stopped_work,
 )
 from backend.ingest.source import source_inputs
 from backend.jobs.schema import Selection, SourceAsset
-from backend.llm.client import LLM, LLMError, LLMReply, image_part
+from backend.llm.client import LLM, LLMError, LLMReply, LLMStopped, image_part
 from backend.mathml.render import render_math
 from backend.prompt.build import build_revision_message
 from backend.skill.bundle import Bundle
@@ -57,8 +69,14 @@ def revise_guide(
     fonts_css: str,
     max_calls: int = MAX_CALLS,
     checker: Callable[[Path, Path], CheckResult] = run_self_check,
+    progress: ProgressReporter | None = None,
+    stop: Event | None = None,
 ) -> RevisionResult:
+    if progress is not None:
+        progress.set_activity(ACTIVITY_PREPARING)
     inputs = source_inputs(request.source, request.selection, source_root)
+    if stopped_work(stop):
+        return RevisionResult(None, 0, [], [STOPPED_FINDING])
     content = [image_part(image) for image in inputs]
     content.append(
         {
@@ -86,23 +104,40 @@ def revise_guide(
     tool_turns = 0
 
     while attempts < budget:
+        if stopped_work(stop):
+            return RevisionResult(None, calls, list(requested), [*last_findings, STOPPED_FINDING])
         if tool_turns >= MAX_TOOL_TURNS:
             last_findings = [
                 "reference lookups exhausted their allowance before a revision was written"
             ]
             break
         calls += 1
+        if progress is not None:
+            progress.begin_attempt()
+            progress.set_activity(ACTIVITY_WAITING)
         try:
-            reply: LLMReply = llm.complete(messages, tools=_tools(bundle))
+            reply: LLMReply = llm.complete(
+                messages,
+                tools=_tools(bundle),
+                on_text=progress.observe if progress is not None else None,
+                stop=stop,
+            )
+        except LLMStopped:
+            return RevisionResult(None, calls, list(requested), [*last_findings, STOPPED_FINDING])
         except LLMError as error:
             attempts += 1
             if not error.retryable or attempts >= budget:
                 return RevisionResult(None, calls, list(requested), [*last_findings, str(error)])
+            if progress is not None:
+                progress.set_activity(ACTIVITY_RETRYING)
             time.sleep(_backoff_seconds(calls))
             continue
 
         if reply.tool_calls:
             tool_turns += 1
+            if progress is not None:
+                progress.discard_attempt_progress()
+                progress.set_activity(ACTIVITY_REFERENCES)
             messages.append(
                 {
                     "role": "assistant",
@@ -129,9 +164,15 @@ def revise_guide(
                 return RevisionResult(None, calls, list(requested), last_findings)
             repair_used = True
             messages.append({"role": "user", "content": _empty_reply_prompt(last_findings[0])})
+            if progress is not None:
+                progress.set_activity(ACTIVITY_CORRECTING)
             continue
 
+        if stopped_work(stop):
+            return RevisionResult(None, calls, list(requested), [*last_findings, STOPPED_FINDING])
         candidate = inject_fonts(render_math(_strip_fences(reply.text or "")), fonts_css)
+        if progress is not None:
+            progress.set_activity(ACTIVITY_CHECKING)
         findings = _validated_findings(candidate, bundle.skill_dir, checker)
         if not findings:
             return RevisionResult(candidate, calls, list(requested), [])
@@ -145,6 +186,8 @@ def revise_guide(
         repair_used = True
         messages.append({"role": "assistant", "content": reply.text or ""})
         messages.append({"role": "user", "content": _repair_prompt(last_findings)})
+        if progress is not None:
+            progress.set_activity(ACTIVITY_CORRECTING)
 
     return RevisionResult(
         None,

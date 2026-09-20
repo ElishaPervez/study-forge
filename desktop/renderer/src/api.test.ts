@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { artifactUrl, createApi } from "./api";
+import { ApiError, artifactUrl, createApi } from "./api";
 
 describe("createApi", () => {
   it("registers the selected source paths", async () => {
@@ -28,15 +28,16 @@ describe("createApi", () => {
     });
   });
 
-  it("creates one guide with the selected source and selection", async () => {
+  it("accepts one guide with the selected source, selection and receipt", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
+      status: 202,
       json: async () => ({ guide_id: "guide-1", status: "pending" }),
     });
     vi.stubGlobal("fetch", fetchMock);
 
     const api = createApi("http://127.0.0.1:5000");
-    await api.createGuide("source-1", { mode: "custom", start: 3, end: 7 });
+    await api.createGuide("source-1", { mode: "custom", start: 3, end: 7 }, "a".repeat(32));
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("http://127.0.0.1:5000/api/guides");
@@ -44,27 +45,34 @@ describe("createApi", () => {
     expect(JSON.parse(init.body)).toEqual({
       source_id: "source-1",
       selection: { mode: "custom", start: 3, end: 7 },
+      receipt: "a".repeat(32),
     });
   });
 
-  it("starts generation for the created guide", async () => {
+  it("starts generation for the created guide with its receipt", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ guide_id: "guide-1", status: "ok" }),
+      status: 202,
+      json: async () => ({ guide_id: "guide-1", status: "pending" }),
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await createApi("http://127.0.0.1:5000").generateGuide("guide-1");
+    await createApi("http://127.0.0.1:5000").generateGuide("guide-1", "b".repeat(32));
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:5000/api/guides/guide-1/generate",
-      { method: "POST" },
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ receipt: "b".repeat(32) }),
+      },
     );
   });
 
-  it("posts the selected passage and revision instruction", async () => {
+  it("posts the selected passage and revision instruction with a receipt", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
+      status: 202,
       json: async () => ({
         guide_id: "guide-1",
         status: "ok",
@@ -73,11 +81,15 @@ describe("createApi", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await createApi("http://127.0.0.1:5000").reviseGuide("guide-1", {
-      selected_text: "The selected passage",
-      instruction: "Explain the distinction",
-      mode: "custom",
-    });
+    await createApi("http://127.0.0.1:5000").reviseGuide(
+      "guide-1",
+      {
+        selected_text: "The selected passage",
+        instruction: "Explain the distinction",
+        mode: "custom",
+      },
+      "c".repeat(32),
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:5000/api/guides/guide-1/revisions",
@@ -88,8 +100,87 @@ describe("createApi", () => {
           selected_text: "The selected passage",
           instruction: "Explain the distinction",
           mode: "custom",
+          receipt: "c".repeat(32),
         }),
       },
+    );
+  });
+
+  it("reads the queue summary and one request row", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          service_start: "service-1",
+          change_number: 4,
+          accepting: true,
+          closing: false,
+          operations: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ receipt: "a".repeat(32), state: "running" }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createApi("http://127.0.0.1:5000");
+
+    const summary = await api.getQueue();
+    const operation = await api.getOperation("a".repeat(32));
+
+    expect(summary.change_number).toBe(4);
+    expect(summary.accepting).toBe(true);
+    expect(operation.state).toBe("running");
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:5000/api/queue");
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      `http://127.0.0.1:5000/api/operations/${"a".repeat(32)}`,
+    );
+  });
+
+  it("retries a failed request by its receipt and prepares, resumes and confirms closing", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({ guide_id: "guide-1", status: "ok" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createApi("http://127.0.0.1:5000");
+
+    await api.retryOperation("a".repeat(32), "d".repeat(32));
+    await api.prepareClose();
+    await api.resumeClose();
+    await api.confirmClose();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `http://127.0.0.1:5000/api/operations/${"a".repeat(32)}/retry`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ receipt: "d".repeat(32) }),
+      },
+    );
+    expect(fetchMock.mock.calls[1][0]).toBe("http://127.0.0.1:5000/api/shutdown/prepare");
+    expect(fetchMock.mock.calls[2][0]).toBe("http://127.0.0.1:5000/api/shutdown/resume");
+    expect(fetchMock.mock.calls[3][0]).toBe("http://127.0.0.1:5000/api/shutdown/confirm");
+  });
+
+  it("reports the status of a refusal so a lost reply can be told apart", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: async () => ({ detail: "unknown request" }),
+      }),
+    );
+
+    await expect(
+      createApi("http://x").getOperation("a".repeat(32)),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(createApi("http://x").getOperation("a".repeat(32))).rejects.toBeInstanceOf(
+      ApiError,
     );
   });
 
@@ -124,18 +215,23 @@ describe("createApi", () => {
     );
   });
 
-  it("retries the same failed guide id", async () => {
+  it("retries the same failed guide id with a receipt", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ guide_id: "failed-guide", status: "ok" }),
+      status: 202,
+      json: async () => ({ guide_id: "failed-guide", status: "failed" }),
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await createApi("http://127.0.0.1:5000").retryGuide("failed-guide");
+    await createApi("http://127.0.0.1:5000").retryGuide("failed-guide", "e".repeat(32));
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:5000/api/guides/failed-guide/retry",
-      { method: "POST" },
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ receipt: "e".repeat(32) }),
+      },
     );
   });
 

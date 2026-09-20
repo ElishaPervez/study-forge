@@ -31,4 +31,11 @@ describe("Study Forge accessibility and compact-window rules", () => {
     expect(css).toContain(".rail-toggle");
     expect(css).toContain(".rail-header");
   });
+
+  it("anchors the guide queue to the bottom right with its own scrolling list", () => {
+    expect(css).toMatch(/\.generation-queue \{[\s\S]*?position: fixed;/);
+    expect(css).toMatch(/\.generation-queue \{[\s\S]*?bottom: 16px;/);
+    expect(css).toMatch(/\.generation-queue-list \{[\s\S]*?overflow-y: auto;/);
+    expect(css).toMatch(/@media \(max-width: 640px\) \{[\s\S]*?\.generation-queue \{/);
+  });
 });

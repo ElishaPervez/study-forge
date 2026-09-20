@@ -65,6 +65,7 @@ describe("HistoryList", () => {
   });
 
   it.each(["failed", "needs-attention"])("keeps Retry and Delete in a %s guide's context menu", (status) => {
+    // A failed guide still opens for reading; its recovery actions stay in the menu.
     const failed = guide({
       guide_id: "failed-guide",
       name: "Failed guide",
@@ -86,7 +87,7 @@ describe("HistoryList", () => {
     expect(markup).toContain('aria-haspopup="menu"');
     expect(markup).toContain('aria-keyshortcuts="Shift+F10"');
     expect(markup).toContain('tabindex="0"');
-    expect(markup).not.toContain("is-openable");
+    expect(markup).toContain("is-openable");
     expect(markup).not.toContain(">Retry</button>");
     expect(markup).not.toContain(">Delete</button>");
     expect(markup).not.toContain(">Open</button>");
@@ -139,14 +140,37 @@ describe("HistoryList", () => {
     expect(markup).not.toContain(">Delete</button>");
   });
 
-  it("only lets a ready, unlocked card open on a plain click", () => {
+  it("opens every modern guide card but not a legacy record or a busy rail", () => {
     expect(historyItemOpensGuide("ok", false, false)).toBe(true);
     expect(historyItemOpensGuide("ok", true, false)).toBe(false);
     expect(historyItemOpensGuide("ok", false, true)).toBe(false);
-    expect(historyItemOpensGuide("failed", false, false)).toBe(false);
-    expect(historyItemOpensGuide("needs-attention", false, false)).toBe(false);
-    expect(historyItemOpensGuide("running", false, false)).toBe(false);
+    expect(historyItemOpensGuide("failed", false, false)).toBe(true);
+    expect(historyItemOpensGuide("needs-attention", false, false)).toBe(true);
+    expect(historyItemOpensGuide("pending", false, false)).toBe(true);
+    expect(historyItemOpensGuide("running", false, false)).toBe(true);
     expect(historyItemOpensGuide("legacy", false, false)).toBe(false);
+    expect(historyItemOpensGuide("running", true, false)).toBe(false);
+  });
+
+  it("opens a guide that is waiting or running with no change menu", () => {
+    const busy = guide({ guide_id: "busy-guide", status: "running", artifact_url: null });
+
+    const markup = renderToStaticMarkup(
+      <HistoryList
+        guides={[busy]}
+        busyGuideIds={new Set(["busy-guide"])}
+        onOpen={() => undefined}
+        onRename={() => undefined}
+        onDelete={() => undefined}
+        onRetry={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('class="history-item is-openable is-busy"');
+    expect(markup).toContain('tabindex="0"');
+    expect(markup).toContain("Waiting in the queue");
+    expect(markup).not.toContain("aria-haspopup");
+    expect(markup).not.toContain("aria-keyshortcuts");
   });
 
   it("keeps a guide with an unavailable source readable in history", () => {
@@ -170,10 +194,10 @@ describe("HistoryList", () => {
     expect(markup).toContain("Choose the source again");
     expect(markup).toContain('role="alert"');
     expect(markup).toContain('aria-haspopup="menu"');
-    expect(markup).not.toContain("is-openable");
+    expect(markup).toContain("is-openable");
   });
 
-  it("offers no context menu while the rail is busy or the guide has nothing to run", () => {
+  it("offers no context menu while the rail is busy or the guide has nothing to change", () => {
     const busyMarkup = renderToStaticMarkup(
       <HistoryList
         guides={[guide()]}
@@ -198,7 +222,9 @@ describe("HistoryList", () => {
     expect(busyMarkup).not.toContain("tabindex");
     expect(busyMarkup).not.toContain("is-openable");
     expect(runningMarkup).not.toContain("aria-haspopup");
-    expect(runningMarkup).not.toContain("is-openable");
+    // A guide that is still generating opens for reading once the rail is free.
+    expect(runningMarkup).toContain("tabindex=\"0\"");
+    expect(runningMarkup).toContain("is-openable");
   });
 
   it("keeps the previous name when the submitted name is empty", () => {

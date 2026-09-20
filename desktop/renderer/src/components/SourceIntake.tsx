@@ -33,6 +33,8 @@ export interface SourceIntakeProps {
   source: SourceDraft | null;
   disabled?: boolean;
   busy?: boolean;
+  /** The shown source belongs to a guide that has a request waiting or running. */
+  readOnly?: boolean;
   error?: string | null;
   onPathsSelected: (paths: string[]) => void | Promise<void>;
   onRemove: () => void | Promise<void>;
@@ -129,6 +131,7 @@ export const SourceIntake = memo(function SourceIntake({
   source,
   disabled = false,
   busy = false,
+  readOnly = false,
   error,
   onPathsSelected,
   onRemove,
@@ -137,6 +140,9 @@ export const SourceIntake = memo(function SourceIntake({
   const [inputError, setInputError] = useState<string | null>(null);
   const localErrorParentRef = useRef<string | null | undefined>(error);
   const unavailable = disabled || busy;
+  // Choosing another source is always allowed: it starts a separate draft. Only
+  // changing the source this busy guide points at is held back.
+  const locked = unavailable || readOnly;
 
   useEffect(() => {
     setInputError(null);
@@ -196,7 +202,7 @@ export const SourceIntake = memo(function SourceIntake({
   };
 
   const handleRemove = () => {
-    if (unavailable) return;
+    if (locked) return;
     beginSourceRemoval(() => setInputError(null), onRemove);
   };
 
@@ -243,7 +249,7 @@ export const SourceIntake = memo(function SourceIntake({
             type="button"
             className="source-remove-action"
             onClick={handleRemove}
-            disabled={unavailable || storedSource}
+            disabled={locked || storedSource}
           >
             Remove
           </button>
@@ -252,6 +258,12 @@ export const SourceIntake = memo(function SourceIntake({
         <button type="button" className="secondary-button source-button" onClick={() => void handlePick()} disabled={unavailable}>
           {busy ? "Registering source..." : source ? "Choose different source" : "Choose source"}
         </button>
+        {readOnly ? (
+          <p className="source-read-only-note" role="status">
+            This guide has a request waiting or running, so its pages stay locked. Choose another
+            source to start a separate guide.
+          </p>
+        ) : null}
       </div>
 
       {displayedError ? <p className="source-inline-error" role="alert">{displayedError}</p> : null}
@@ -259,7 +271,7 @@ export const SourceIntake = memo(function SourceIntake({
       {source?.kind === "images" && onImagesChange ? (
         <ImageGroupEditor
           files={source.imageFiles}
-          disabled={unavailable || storedSource}
+          disabled={locked || storedSource}
           onChange={onImagesChange}
         />
       ) : null}

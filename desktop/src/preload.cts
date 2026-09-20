@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld("studyForge", {
   toggleMaximizeWindow: (): Promise<void> => ipcRenderer.invoke("window:maximize-toggle"),
   isWindowMaximized: (): Promise<boolean> => ipcRenderer.invoke("window:is-maximized"),
   closeWindow: (): Promise<void> => ipcRenderer.invoke("window:close"),
+  beginSubmission: (): Promise<number | null> => ipcRenderer.invoke("submission:begin"),
+  endSubmission: (token: number): Promise<void> => ipcRenderer.invoke("submission:end", token),
   onWindowMaximizedChange: (callback: (maximized: boolean) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, maximized: boolean): void => {
       callback(maximized);

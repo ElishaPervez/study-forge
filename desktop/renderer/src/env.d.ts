@@ -15,6 +15,9 @@ declare global {
       toggleMaximizeWindow: () => Promise<void>;
       isWindowMaximized: () => Promise<boolean>;
       closeWindow: () => Promise<void>;
+      /** Null while the app is closing, so the request must not be sent. */
+      beginSubmission: () => Promise<number | null>;
+      endSubmission: (token: number) => Promise<void>;
       onWindowMaximizedChange: (callback: (maximized: boolean) => void) => () => void;
     };
   }

@@ -1,21 +1,31 @@
+"""The local API.
+
+Every handler here is quick: it validates the action, records it, and answers.
+Slow work (source reads, model calls, checking an artifact) runs in the single
+background queue, which publishes a guide only after the result is checked.
+"""
+
 from __future__ import annotations
 
 import json
 import re
 import shutil
 import threading
-from datetime import UTC, datetime
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-import pymupdf
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.fonts.embed import default_fonts_css
-from backend.generate.guide import GuideRequest, generate_guide
-from backend.generate.revision import RevisionRequest, revise_guide
+from backend.generate.runner import (
+    SOURCE_RECOVERY_MESSAGE,
+    GuideRunner,
+    is_source_read_failure,
+)
 from backend.generate.unit import UnitStatus
 from backend.ingest.pdf import preview_page
 from backend.ingest.source import (
@@ -25,17 +35,26 @@ from backend.ingest.source import (
     store_source,
     validate_stored_source,
 )
-from backend.jobs.schema import GuideRecord, LegacyHistoryEntry, SourceAsset
+from backend.jobs.operations import (
+    completed_file_path,
+    current_fingerprint,
+    guide_id_for_receipt,
+    recover_operations,
+)
+from backend.jobs.queue import GuideQueue, QueueError, QueueRequest
+from backend.jobs.schema import (
+    GuideRecord,
+    LegacyHistoryEntry,
+    OperationRecord,
+    SourceAsset,
+)
 from backend.jobs.store import (
     delete_guide,
-    guide_dir_for,
     list_guides,
     list_history,
     load_guide,
     new_guide,
-    recover_interrupted_guides,
     update_guide,
-    write_atomic,
 )
 from backend.llm.client import LLM, OpenRouterLLM
 from backend.settings import Settings
@@ -49,16 +68,22 @@ class RegisterSourceBody(BaseModel):
 class CreateGuideBody(BaseModel):
     source_id: str
     selection: dict[str, object]
+    receipt: str
 
 
 class RenameGuideBody(BaseModel):
     name: str
 
 
+class OperationBody(BaseModel):
+    receipt: str
+
+
 class RevisionBody(BaseModel):
     selected_text: str
-    instruction: str
+    instruction: str = ""
     mode: Literal["clarify", "custom"]
+    receipt: str
 
 
 WINDOWS_RESERVED_EXPORT_NAMES = {
@@ -70,35 +95,31 @@ WINDOWS_RESERVED_EXPORT_NAMES = {
     *(f"LPT{number}" for number in range(1, 10)),
 }
 
-SOURCE_RECOVERY_MESSAGE = (
-    "The stored source could not be read. Choose the source again in the Source section."
-)
 
+class _SourceUnavailableError(Exception):
+    """A stored source that cannot be read, without HTTP semantics."""
 
-class _SourceUnavailableError(HTTPException):
-    def __init__(self, diagnostic: str) -> None:
-        super().__init__(status_code=404, detail=SOURCE_RECOVERY_MESSAGE)
+    def __init__(self, diagnostic: str, *, known: bool = True) -> None:
+        super().__init__(diagnostic)
         self.diagnostic = diagnostic
-
-
-def _is_source_read_failure(error: BaseException) -> bool:
-    return isinstance(error, (FileNotFoundError, pymupdf.FileDataError, HTTPException))
-
-
-def _error_diagnostic(error: BaseException) -> str:
-    diagnostic = getattr(error, "diagnostic", None)
-    if isinstance(diagnostic, str) and diagnostic:
-        return diagnostic
-    if isinstance(error, HTTPException):
-        detail = error.detail
-        if isinstance(detail, str) and detail:
-            return detail
-    return str(error) or error.__class__.__name__
+        # A source with no manifest at all is simply unknown; an existing one that
+        # cannot be read tells the user to choose the source again.
+        self.known = known
 
 
 def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
-    app = FastAPI(title="Study Forge")
-    app.state.started_at = datetime.now(UTC)
+    # Decide which saved versions are authoritative once, before any screen reads
+    # history: a request that was still unfinished belongs to an earlier service.
+    recover_operations(settings.jobs_dir)
+    queues: list[GuideQueue] = []
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        yield
+        for queue in queues:
+            queue.stop()
+
+    app = FastAPI(title="Study Forge", lifespan=lifespan)
     bundle = load_bundle(settings.skill_dir)
     fonts_css = default_fonts_css()
     app.state.settings = settings
@@ -108,40 +129,56 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
         reasoning_effort=settings.reasoning_effort,
         max_output_tokens=settings.max_output_tokens,
     )
-    guide_locks: dict[str, threading.Lock] = {}
-    guide_locks_guard = threading.Lock()
     source_operations_lock = threading.Lock()
 
-    def _guide_lock(guide_id: str) -> threading.Lock:
-        with guide_locks_guard:
-            return guide_locks.setdefault(guide_id, threading.Lock())
-
-    def _source_or_404(source_id: str) -> SourceAsset:
+    def _load_source(source_id: str) -> SourceAsset:
+        """Read and validate a stored source; the caller decides what a failure means."""
         try:
             source_dir = source_dir_for(settings.jobs_dir, source_id)
-            for manifest_name in (SOURCE_MANIFEST_NAME, "manifest.json"):
-                manifest_path = source_dir / manifest_name
-                if not manifest_path.is_file():
-                    continue
+        except (OSError, ValueError):
+            raise _SourceUnavailableError(f"invalid source id: {source_id!r}") from None
+        for manifest_name in (SOURCE_MANIFEST_NAME, "manifest.json"):
+            manifest_path = source_dir / manifest_name
+            if not manifest_path.is_file():
+                continue
+            try:
                 payload = json.loads(manifest_path.read_text(encoding="utf-8"))
                 source = SourceAsset.from_dict(payload)
                 if source.source_id != source_id:
                     raise ValueError("source manifest id does not match its directory")
-                try:
-                    validate_stored_source(source, source_dir)
-                except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
-                    raise _SourceUnavailableError(str(error)) from None
-                return source
-            raise FileNotFoundError
-        except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError):
-            raise HTTPException(status_code=404, detail="unknown source") from None
+                validate_stored_source(source, source_dir)
+            except (
+                FileNotFoundError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as error:
+                raise _SourceUnavailableError(str(error)) from None
+            return source
+        raise _SourceUnavailableError(
+            f"no stored manifest for source {source_id!r}", known=False
+        )
+
+    def _source_or_404(source_id: str) -> SourceAsset:
+        try:
+            return _load_source(source_id)
+        except _SourceUnavailableError as error:
+            detail = SOURCE_RECOVERY_MESSAGE if error.known else "unknown source"
+            raise HTTPException(status_code=404, detail=detail) from None
 
     def _guide_or_404(guide_id: str) -> GuideRecord:
-        recover_interrupted_guides(settings.jobs_dir, app.state.started_at)
         try:
             return load_guide(settings.jobs_dir, guide_id)
         except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError):
             raise HTTPException(status_code=404, detail="unknown guide") from None
+
+    def _artifact_path(guide: GuideRecord) -> Path | None:
+        try:
+            return completed_file_path(settings.jobs_dir, guide)
+        except ValueError:
+            return None
 
     def _source_view(source: SourceAsset, **state: object) -> dict:
         source_dir = source_dir_for(settings.jobs_dir, source.source_id)
@@ -172,21 +209,54 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
         return view
 
     def _guide_view(guide: GuideRecord) -> dict:
-        artifact_path = guide_dir_for(settings.jobs_dir, guide.guide_id) / "artifact.html"
         view = guide.to_dict()
         try:
-            source = _source_or_404(guide.source_id)
-        except HTTPException:
+            source = _load_source(guide.source_id)
+        except _SourceUnavailableError:
             view["source"] = None
             view["source_error"] = SOURCE_RECOVERY_MESSAGE
         else:
             view["source"] = _source_view(source)
+        artifact_path = _artifact_path(guide)
         view["artifact_url"] = (
             f"/api/guides/{guide.guide_id}/artifact.html"
-            if guide.status == UnitStatus.OK.value and artifact_path.is_file()
+            if guide.status == UnitStatus.OK.value
+            and artifact_path is not None
+            and artifact_path.is_file()
             else None
         )
+        active = queue.current_operation(guide.guide_id)
+        view["operation"] = queue.row(active.receipt) if active is not None else None
+        retryable = queue.retryable_failure(guide.guide_id)
+        view["retryable_request"] = retryable.summary() if retryable is not None else None
         return view
+
+    def _request_receipt(value: str) -> str:
+        """A request receipt must be well formed before it names anything."""
+        try:
+            guide_id_for_receipt(value)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="invalid request receipt") from None
+        return value
+
+    def _submit(request: QueueRequest) -> OperationRecord:
+        try:
+            return queue.submit(request)
+        except QueueError as error:
+            raise HTTPException(status_code=error.status_code, detail=str(error)) from None
+
+    def _accepted_view(guide: GuideRecord, operation: OperationRecord) -> dict:
+        view = _guide_view(guide)
+        row = queue.row(operation.receipt)
+        if row is not None:
+            view["operation"] = row
+        return view
+
+    def _operation_row(receipt: str) -> dict:
+        row = queue.row(_request_receipt(receipt))
+        if row is None:
+            raise HTTPException(status_code=404, detail="unknown request")
+        return row
 
     def _source_kind(paths: list[Path]) -> Literal["pdf", "images"]:
         if not paths:
@@ -201,81 +271,17 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
             raise ValueError(f"unsupported source format: {unsupported[0] or '<none>'}")
         return "images"
 
-    def _generation_artifact(
-        guide: GuideRecord, candidate: Path | None, status: UnitStatus
-    ) -> Path | None:
-        if status != UnitStatus.OK or candidate is None or not candidate.is_file():
-            return None
-        target = guide_dir_for(settings.jobs_dir, guide.guide_id) / "artifact.html"
-        write_atomic(target, candidate.read_bytes())
-        return target
-
-    def _run_generation(guide: GuideRecord, *, retry: bool) -> dict:
-        lock = _guide_lock(guide.guide_id)
-        with lock:
-            current = _guide_or_404(guide.guide_id)
-            return _run_generation_locked(current, retry=retry)
-
-    def _run_generation_locked(guide: GuideRecord, *, retry: bool) -> dict:
-        if not retry and guide.status == UnitStatus.OK.value:
-            artifact_path = guide_dir_for(settings.jobs_dir, guide.guide_id) / "artifact.html"
-            if artifact_path.is_file():
-                return _guide_view(guide)
-        if retry and guide.status not in {
-            UnitStatus.FAILED.value,
-            UnitStatus.NEEDS_ATTENTION.value,
-        }:
-            raise HTTPException(status_code=409, detail="only a failed guide can be retried")
-        if not retry and guide.status != UnitStatus.PENDING.value:
-            raise HTTPException(status_code=409, detail="guide is not pending")
-
-        current = update_guide(
-            settings.jobs_dir,
-            guide,
-            status=UnitStatus.RUNNING.value,
-            error=None,
-            findings=[],
-        )
-
-        def save_status(status: UnitStatus) -> None:
-            nonlocal current
-            current = update_guide(settings.jobs_dir, current, status=status.value)
-
-        try:
-            source = _source_or_404(current.source_id)
-            result = generate_guide(
-                GuideRequest(current.guide_id, source, current.selection),
-                source_root=settings.jobs_dir,
-                llm=app.state.llm,
-                bundle=bundle,
-                fonts_css=fonts_css,
-                out_dir=guide_dir_for(settings.jobs_dir, current.guide_id),
-                status_callback=save_status,
-            )
-            _generation_artifact(current, result.artifact_path, result.status)
-            status = result.status.value
-            error = None if status == UnitStatus.OK.value else "; ".join(result.findings)
-            if status != UnitStatus.OK.value and not error:
-                error = "guide generation did not produce a verified artifact"
-            name = result.name if result.status == UnitStatus.OK else current.name
-            current = update_guide(
-                settings.jobs_dir,
-                current,
-                name=name,
-                status=status,
-                error=error,
-                findings=result.findings,
-            )
-        except Exception as error:  # noqa: BLE001 - every generation failure must persist
-            message = SOURCE_RECOVERY_MESSAGE if _is_source_read_failure(error) else _error_diagnostic(error)
-            current = update_guide(
-                settings.jobs_dir,
-                current,
-                status=UnitStatus.FAILED.value,
-                error=message,
-                findings=[_error_diagnostic(error)],
-            )
-        return _guide_view(current)
+    runner = GuideRunner(
+        jobs_dir=settings.jobs_dir,
+        llm=lambda: app.state.llm,
+        bundle=bundle,
+        fonts_css=fonts_css,
+        load_source=_load_source,
+    )
+    queue = GuideQueue(jobs_dir=settings.jobs_dir, runner=runner)
+    queue.start()
+    queues.append(queue)
+    app.state.queue = queue
 
     @app.post("/api/sources")
     def register_source(body: RegisterSourceBody) -> dict:
@@ -305,7 +311,7 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
         try:
             rendered = preview_page(source_path, page_number, source_path.parent / "previews")
         except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
-            detail = SOURCE_RECOVERY_MESSAGE if _is_source_read_failure(error) else str(error)
+            detail = SOURCE_RECOVERY_MESSAGE if is_source_read_failure(error) else str(error)
             raise HTTPException(status_code=404, detail=detail) from None
         return FileResponse(rendered.path, media_type="image/jpeg")
 
@@ -327,7 +333,10 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
 
     @app.delete("/api/sources/{source_id}")
     def remove_source(source_id: str) -> dict:
-        with source_operations_lock:
+        # The reference check and source removal share admission with guide
+        # acceptance, so a new guide cannot be created against a source while it
+        # is being removed.
+        with queue.admission(), source_operations_lock:
             try:
                 source_dir = source_dir_for(settings.jobs_dir, source_id)
             except (OSError, ValueError):
@@ -350,50 +359,123 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
             shutil.rmtree(source_dir)
             return {"source_id": source_id, "deleted": True, "retained": False}
 
-    @app.post("/api/guides")
+    @app.post("/api/guides", status_code=202)
     def create_guide(body: CreateGuideBody) -> dict:
-        with source_operations_lock:
-            source = _source_or_404(body.source_id)
-            try:
-                guide = new_guide(settings.jobs_dir, source, body.selection)
-            except (TypeError, ValueError) as error:
-                raise HTTPException(status_code=400, detail=str(error)) from None
-            return _guide_view(guide)
+        guide_id = _request_receipt(body.receipt)
+
+        def prepare() -> None:
+            # Runs under admission, and under the source lock, so the source
+            # cannot be removed between the check and the new history entry.
+            with source_operations_lock:
+                source = _source_or_404(body.source_id)
+                try:
+                    created = new_guide(
+                        settings.jobs_dir, source, body.selection, guide_id=guide_id
+                    )
+                except (TypeError, ValueError) as error:
+                    raise HTTPException(status_code=400, detail=str(error)) from None
+                queue.remember_guide(created.guide_id, created.name)
+
+        operation = _submit(
+            QueueRequest(
+                guide_id=guide_id,
+                kind="create",
+                receipt=guide_id,
+                prepare=prepare,
+            )
+        )
+
+        return _accepted_view(_guide_or_404(guide_id), operation)
 
     @app.get("/api/guides")
     def get_guides() -> list[dict]:
         return [
             entry.to_dict() if isinstance(entry, LegacyHistoryEntry) else _guide_view(entry)
-            for entry in list_history(settings.jobs_dir, recover_before=app.state.started_at)
+            for entry in list_history(settings.jobs_dir)
         ]
 
     @app.get("/api/guides/{guide_id}")
     def get_guide(guide_id: str) -> dict:
         return _guide_view(_guide_or_404(guide_id))
 
-    @app.post("/api/guides/{guide_id}/generate")
-    def generate(guide_id: str) -> dict:
-        return _run_generation(_guide_or_404(guide_id), retry=False)
+    @app.post("/api/guides/{guide_id}/generate", status_code=202)
+    def generate(guide_id: str, body: OperationBody) -> dict:
+        receipt = _request_receipt(body.receipt)
+        guide = _guide_or_404(guide_id)
+        if guide.status == UnitStatus.OK.value and _artifact_path(guide) is not None:
+            raise HTTPException(status_code=409, detail="guide is already complete")
+        if guide.status != UnitStatus.PENDING.value:
+            raise HTTPException(status_code=409, detail="guide is not pending")
+        operation = _submit(
+            QueueRequest(guide_id=guide.guide_id, kind="create", receipt=receipt)
+        )
+        return _accepted_view(guide, operation)
 
-    @app.post("/api/guides/{guide_id}/retry")
-    def retry(guide_id: str) -> dict:
-        return _run_generation(_guide_or_404(guide_id), retry=True)
+    @app.post("/api/guides/{guide_id}/retry", status_code=202)
+    def retry(guide_id: str, body: OperationBody) -> dict:
+        receipt = _request_receipt(body.receipt)
+        guide = _guide_or_404(guide_id)
+        if guide.status not in {UnitStatus.FAILED.value, UnitStatus.NEEDS_ATTENTION.value}:
+            raise HTTPException(status_code=409, detail="only a failed guide can be retried")
+        operation = _submit(
+            QueueRequest(guide_id=guide.guide_id, kind="retry", receipt=receipt)
+        )
+        return _accepted_view(guide, operation)
+
+    @app.post("/api/guides/{guide_id}/revisions", status_code=202)
+    def revise(guide_id: str, body: RevisionBody) -> dict:
+        receipt = _request_receipt(body.receipt)
+        if not body.selected_text.strip():
+            raise HTTPException(status_code=400, detail="selected text is required")
+        if body.mode == "custom" and not body.instruction.strip():
+            raise HTTPException(status_code=400, detail="custom revisions require an instruction")
+        guide = _guide_or_404(guide_id)
+        if guide.status != UnitStatus.OK.value:
+            raise HTTPException(status_code=409, detail="only a verified guide can be revised")
+        base_fingerprint = current_fingerprint(settings.jobs_dir, guide)
+        if base_fingerprint is None:
+            raise HTTPException(status_code=409, detail="guide has no generated artifact")
+        operation = _submit(
+            QueueRequest(
+                guide_id=guide.guide_id,
+                kind="clarify" if body.mode == "clarify" else "update",
+                receipt=receipt,
+                selected_text=body.selected_text,
+                instruction=body.instruction,
+                revision_mode=body.mode,
+                intended_revision=guide.revision_count,
+                base_fingerprint=base_fingerprint,
+            )
+        )
+        return _accepted_view(guide, operation)
 
     @app.patch("/api/guides/{guide_id}")
     def rename_guide(guide_id: str, body: RenameGuideBody) -> dict:
-        with _guide_lock(guide_id):
+        with queue.admission():
             guide = _guide_or_404(guide_id)
+            if queue.guide_is_busy(guide_id):
+                raise HTTPException(
+                    status_code=409,
+                    detail="this guide already has a request waiting or running",
+                )
             name = body.name.strip()
             if name:
                 guide = update_guide(settings.jobs_dir, guide, name=name)
+            queue.remember_guide(guide.guide_id, guide.name)
             return _guide_view(guide)
 
     @app.delete("/api/guides/{guide_id}")
     def remove_guide(guide_id: str) -> dict:
-        with _guide_lock(guide_id):
+        with queue.admission():
             guide = _guide_or_404(guide_id)
+            if queue.guide_is_busy(guide_id):
+                raise HTTPException(
+                    status_code=409,
+                    detail="this guide already has a request waiting or running",
+                )
             with source_operations_lock:
                 delete_guide(settings.jobs_dir, guide.guide_id)
+            queue.mark_guide_deleted(guide.guide_id)
             return {"guide_id": guide.guide_id, "deleted": True}
 
     @app.get("/api/guides/{guide_id}/artifact.html")
@@ -403,8 +485,8 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="download must be 0 or 1")
         if guide.status != UnitStatus.OK.value:
             raise HTTPException(status_code=409, detail="only a verified guide has an artifact")
-        path = guide_dir_for(settings.jobs_dir, guide.guide_id) / "artifact.html"
-        if not path.is_file():
+        path = _artifact_path(guide)
+        if path is None or not path.is_file():
             raise HTTPException(status_code=404, detail="artifact not generated yet")
         disposition = "attachment" if download else "inline"
         return FileResponse(
@@ -417,56 +499,35 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
             },
         )
 
-    def _revise_locked(guide: GuideRecord, body: RevisionBody) -> dict:
-        if not body.selected_text.strip():
-            raise HTTPException(status_code=400, detail="selected text is required")
-        if body.mode == "custom" and not body.instruction.strip():
-            raise HTTPException(status_code=400, detail="custom revisions require an instruction")
-        artifact_path = guide_dir_for(settings.jobs_dir, guide.guide_id) / "artifact.html"
-        if not artifact_path.is_file():
-            raise HTTPException(status_code=409, detail="guide has no generated artifact")
-        if guide.status != UnitStatus.OK.value:
-            raise HTTPException(status_code=409, detail="only a verified guide can be revised")
-        try:
-            current_html = artifact_path.read_text(encoding="utf-8")
-            source = _source_or_404(guide.source_id)
-            result = revise_guide(
-                RevisionRequest(
-                    guide.guide_id,
-                    source,
-                    guide.selection,
-                    body.selected_text,
-                    body.instruction,
-                    body.mode,
-                    current_html,
-                ),
-                source_root=settings.jobs_dir,
-                llm=app.state.llm,
-                bundle=bundle,
-                fonts_css=fonts_css,
-            )
-        except (FileNotFoundError, HTTPException, OSError, RuntimeError, ValueError) as error:
-            message = SOURCE_RECOVERY_MESSAGE if _is_source_read_failure(error) else str(error)
-            raise HTTPException(status_code=400, detail=message) from None
-        if result.html is None:
-            raise HTTPException(
-                status_code=400,
-                detail={"message": "revision failed", "findings": result.findings},
-            )
-        write_atomic(artifact_path, result.html.encode("utf-8"))
-        guide = update_guide(
-            settings.jobs_dir,
-            guide,
-            revision_count=guide.revision_count + 1,
-            error=None,
-        )
-        return _guide_view(guide)
+    @app.get("/api/queue")
+    def queue_summary() -> dict:
+        return queue.snapshot()
 
-    @app.post("/api/guides/{guide_id}/revisions")
-    def revise(guide_id: str, body: RevisionBody) -> dict:
-        with _guide_lock(guide_id):
-            guide = _guide_or_404(guide_id)
-            return _revise_locked(guide, body)
+    @app.get("/api/operations/{receipt}")
+    def operation_view(receipt: str) -> dict:
+        return _operation_row(receipt)
+
+    @app.post("/api/operations/{receipt}/retry", status_code=202)
+    def retry_operation(receipt: str, body: OperationBody) -> dict:
+        original = _operation_row(receipt)
+        new_receipt = _request_receipt(body.receipt)
+        try:
+            operation = queue.retry_request(original["receipt"], new_receipt=new_receipt)
+        except QueueError as error:
+            raise HTTPException(status_code=error.status_code, detail=str(error)) from None
+        return _accepted_view(_guide_or_404(operation.guide_id), operation)
+
+    @app.post("/api/shutdown/prepare")
+    def prepare_shutdown() -> dict:
+        return queue.prepare_close()
+
+    @app.post("/api/shutdown/resume")
+    def resume_shutdown() -> dict:
+        return queue.resume_close()
+
+    @app.post("/api/shutdown/confirm")
+    def confirm_shutdown() -> dict:
+        return queue.confirm_close()
 
     return app
 

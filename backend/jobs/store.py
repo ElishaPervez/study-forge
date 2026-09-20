@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 import uuid
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
@@ -11,7 +12,6 @@ from pathlib import Path
 
 from backend.generate.unit import UnitStatus
 from backend.jobs.schema import (
-    INTERRUPTED_GUIDE_MESSAGE,
     LEGACY_HISTORY_MESSAGE,
     GuideRecord,
     ImageSelection,
@@ -23,6 +23,10 @@ from backend.jobs.schema import (
 
 JOB_ID_LENGTH = 32
 RESERVED = {"CON", "PRN", "AUX", "NUL", "COM1", "LPT1"}
+# On Windows a reader holding a record open makes the atomic replace fail with a
+# sharing violation, so a transient failure is retried instead of surfacing.
+REPLACE_RETRY_SECONDS = 2.0
+REPLACE_RETRY_INTERVAL_SECONDS = 0.01
 GUIDES_DIR_NAME = "guides"
 GUIDE_METADATA_NAME = "guide.json"
 INTERRUPTED_GUIDE_STATUSES = {
@@ -101,9 +105,21 @@ def write_atomic(path: Path, data: bytes) -> None:
     temp = path.parent / f".job-tmp-{uuid.uuid4().hex}"
     try:
         temp.write_bytes(data)
-        os.replace(temp, path)
+        _replace_with_retry(temp, path)
     finally:
         temp.unlink(missing_ok=True)
+
+
+def _replace_with_retry(temp: Path, path: Path) -> None:
+    deadline = time.monotonic() + REPLACE_RETRY_SECONDS
+    while True:
+        try:
+            os.replace(temp, path)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(REPLACE_RETRY_INTERVAL_SECONDS)
 
 
 def new_job(
@@ -152,12 +168,16 @@ def set_unit_status(jobs_dir: Path, job_id: str, unit_id: str, status: UnitStatu
 
 
 def new_guide(
-    jobs_dir: Path, source: SourceAsset, selection: Mapping[str, object]
+    jobs_dir: Path,
+    source: SourceAsset,
+    selection: Mapping[str, object],
+    *,
+    guide_id: str | None = None,
 ) -> GuideRecord:
     normalized_selection = _normalize_selection(source, selection)
     now = _now()
     guide = GuideRecord(
-        guide_id=uuid.uuid4().hex,
+        guide_id=guide_id or uuid.uuid4().hex,
         source_id=source.source_id,
         selection=normalized_selection,
         name=source.display_name,
@@ -205,31 +225,6 @@ def list_guides(jobs_dir: Path) -> list[GuideRecord]:
     return sorted(guides, key=lambda guide: guide.updated_at, reverse=True)
 
 
-def recover_interrupted_guides(jobs_dir: Path, started_at: datetime) -> list[GuideRecord]:
-    """Mark in-progress records from before this process as retryable failures."""
-    recovered: list[GuideRecord] = []
-    for guide in list_guides(jobs_dir):
-        if guide.status not in INTERRUPTED_GUIDE_STATUSES:
-            continue
-        metadata_path = guide_dir_for(jobs_dir, guide.guide_id) / GUIDE_METADATA_NAME
-        try:
-            modified_at = datetime.fromtimestamp(metadata_path.stat().st_mtime, UTC)
-        except OSError:
-            continue
-        if modified_at >= started_at:
-            continue
-        recovered.append(
-            update_guide(
-                jobs_dir,
-                guide,
-                status=UnitStatus.FAILED.value,
-                error=INTERRUPTED_GUIDE_MESSAGE,
-                findings=[INTERRUPTED_GUIDE_MESSAGE],
-            )
-        )
-    return recovered
-
-
 def list_legacy_history(jobs_dir: Path) -> list[LegacyHistoryEntry]:
     """Read old job records without converting them into v1 guide records."""
     if not jobs_dir.is_dir():
@@ -267,11 +262,9 @@ def list_legacy_history(jobs_dir: Path) -> list[LegacyHistoryEntry]:
     return sorted(entries, key=lambda entry: entry.updated_at, reverse=True)
 
 
-def list_history(
-    jobs_dir: Path, *, recover_before: datetime | None = None
-) -> list[GuideRecord | LegacyHistoryEntry]:
-    if recover_before is not None:
-        recover_interrupted_guides(jobs_dir, recover_before)
+def list_history(jobs_dir: Path) -> list[GuideRecord | LegacyHistoryEntry]:
+    # Reading history has no side effects: startup recovery decides which saved
+    # versions are authoritative, once, before any screen is served.
     entries: list[GuideRecord | LegacyHistoryEntry] = [
         *list_guides(jobs_dir),
         *list_legacy_history(jobs_dir),
