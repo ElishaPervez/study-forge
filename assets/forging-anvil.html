@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Study Forge · forging loop</title>
+<!--
+  A flat, 2D "forging your guide" loop: a hammer swings down onto an anvil and
+  sparks fly off the hit, forever.
+
+  No libraries, no images, no fonts, no JavaScript - one SVG, one stylesheet,
+  CSS keyframes only. Open the file directly in a browser, or drop the <svg>
+  into a component and the stylesheet next to it.
+
+  Two knobs:
+    --cycle  how long one strike takes (default 1700ms)
+    --spark  the only bit of colour (default a warm forge amber); set it to the
+              app's --accent for a monochrome-indigo version
+
+  The pose at 0% and 100% is identical, so the loop has no seam. The strike
+  lands at 58% of the cycle; the flash, sparks, puffs and anvil jolt are all
+  keyed off that same mark.
+-->
+<style>
+  :root {
+    --cycle: 1700ms;
+    --forge-ink: #232936;
+    --forge-handle: #7b8496;
+    --forge-spark: #ef9d3f;
+    --spark-glow: rgba(239, 157, 63, 0.5);
+  }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    display: grid;
+    place-items: center;
+    background: #f7f8fa;
+  }
+
+  .forge-loop {
+    width: min(68vw, 300px);
+    height: auto;
+    overflow: visible;
+  }
+
+  /* ---------- shapes ---------- */
+
+  .anvil,
+  .hammer-head {
+    fill: var(--forge-ink);
+  }
+
+  .hammer-handle {
+    fill: var(--forge-handle);
+  }
+
+  .anvil {
+    animation: anvilJolt var(--cycle) linear infinite;
+  }
+
+  /* The handle is drawn from the pivot down, so rotating about the origin of
+     the hammer's own coordinate system is the whole rig. */
+  .hammer {
+    transform-box: view-box;
+    transform-origin: 0 0;
+    transform: translate(120px, 2px) rotate(-58deg);
+    animation: swing var(--cycle) infinite;
+  }
+
+  /* ---------- impact burst ---------- */
+
+  .flash {
+    fill: var(--forge-spark);
+    opacity: 0;
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: flash var(--cycle) linear infinite;
+  }
+
+  .spark {
+    fill: var(--forge-spark);
+    opacity: 0;
+    animation: sparkFly var(--cycle) linear infinite;
+  }
+
+  .puff {
+    fill: var(--forge-ink);
+    opacity: 0;
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: puffUp var(--cycle) linear infinite;
+  }
+
+  /* ---------- timeline: strike at 58% ---------- */
+
+  @keyframes swing {
+    0%   { transform: translate(120px, 2px) rotate(-58deg); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+    26%  { transform: translate(120px, 2px) rotate(-62deg); animation-timing-function: linear; }
+    38%  { transform: translate(120px, 2px) rotate(-62deg); animation-timing-function: cubic-bezier(0.62, 0.02, 0.9, 0.4); }
+    58%  { transform: translate(120px, 2px) rotate(0deg); animation-timing-function: cubic-bezier(0.2, 0.7, 0.4, 1); }
+    /* the bounce lifts the hammer just clear of the face before it tips back */
+    64%  { transform: translate(120px, -1px) rotate(-6deg); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+    70%  { transform: translate(120px, 2px) rotate(0deg); animation-timing-function: cubic-bezier(0.5, 0, 0.4, 1); }
+    100% { transform: translate(120px, 2px) rotate(-58deg); }
+  }
+
+  @keyframes anvilJolt {
+    0%, 57%   { transform: translateY(0); }
+    59%       { transform: translateY(1.8px); }
+    62%       { transform: translateY(-0.7px); }
+    67%, 100% { transform: translateY(0); }
+  }
+
+  @keyframes flash {
+    0%, 57.5% { opacity: 0; transform: scale(0.4); }
+    59%       { opacity: 1; transform: scale(1.1); }
+    64%       { opacity: 0; transform: scale(1.7); }
+    100%      { opacity: 0; transform: scale(0.4); }
+  }
+
+  /* Every spark shares one rule; --dx/--dy/--peak give each its own arc. */
+  @keyframes sparkFly {
+    0%, 57.5% { opacity: 0; transform: translate(0, 0); }
+    58.5%     { opacity: 1; }
+    66%       { opacity: 1; transform: translate(calc(var(--dx) * 0.55), calc(var(--dy) * 0.55 + var(--peak))); }
+    76%       { opacity: 0; transform: translate(var(--dx), var(--dy)); }
+    100%      { opacity: 0; transform: translate(var(--dx), var(--dy)); }
+  }
+
+  @keyframes puffUp {
+    0%, 57%   { opacity: 0; transform: scale(0.5); }
+    60%       { opacity: 0.16; }
+    74%       { opacity: 0; transform: scale(3.4) translate(var(--px, 0), var(--py, -6px)); }
+    100%      { opacity: 0; transform: scale(0.5); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hammer, .anvil, .flash, .spark, .puff { animation: none; }
+    .flash, .spark, .puff { opacity: 0; }
+  }
+</style>
+</head>
+<body>
+<svg class="forge-loop" viewBox="0 0 240 190" role="img" aria-label="A hammer striking an anvil">
+  <!-- anvil: face, horn, body, waist, base, foot -->
+  <path class="anvil" d="M48 94 H168 V108 H156 V128 H132 V148 H160 V162 H174 V170 H42 V162 H56 V148 H84 V128 H60 V108 H48 L4 101 Z" />
+
+  <!-- hammer: handle from the pivot, head at the far end -->
+  <g class="hammer">
+    <rect class="hammer-handle" x="-3.5" y="0" width="7" height="64" rx="3.5" />
+    <rect class="hammer-head" x="-22" y="64" width="44" height="28" rx="3" />
+  </g>
+
+  <!-- impact burst, drawn over the metal: flash, dust, sparks -->
+  <circle class="flash" cx="120" cy="94" r="7" />
+  <circle class="puff" cx="120" cy="90" r="5" style="--px:-14px;--py:-8px" />
+  <circle class="puff" cx="120" cy="90" r="4" style="--px:16px;--py:-10px" />
+  <g>
+    <circle class="spark" cx="120" cy="94" r="1.9" style="--dx:-38px;--dy:-6px;--peak:-30px" />
+    <circle class="spark" cx="120" cy="94" r="1.5" style="--dx:-26px;--dy:22px;--peak:-34px" />
+    <circle class="spark" cx="120" cy="94" r="2.1" style="--dx:-14px;--dy:6px;--peak:-46px" />
+    <circle class="spark" cx="120" cy="94" r="1.4" style="--dx:-52px;--dy:12px;--peak:-26px" />
+    <circle class="spark" cx="120" cy="94" r="1.8" style="--dx:-8px;--dy:-16px;--peak:-58px" />
+    <circle class="spark" cx="120" cy="94" r="1.6" style="--dx:12px;--dy:-12px;--peak:-54px" />
+    <circle class="spark" cx="120" cy="94" r="2" style="--dx:22px;--dy:14px;--peak:-38px" />
+    <circle class="spark" cx="120" cy="94" r="1.5" style="--dx:34px;--dy:-4px;--peak:-32px" />
+    <circle class="spark" cx="120" cy="94" r="1.9" style="--dx:46px;--dy:18px;--peak:-28px" />
+    <circle class="spark" cx="120" cy="94" r="1.4" style="--dx:58px;--dy:8px;--peak:-22px" />
+    <circle class="spark" cx="120" cy="94" r="1.7" style="--dx:-46px;--dy:28px;--peak:-20px" />
+    <circle class="spark" cx="120" cy="94" r="1.5" style="--dx:40px;--dy:30px;--peak:-18px" />
+  </g>
+</svg>
+</body>
+</html>

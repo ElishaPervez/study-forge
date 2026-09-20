@@ -14,6 +14,7 @@ import {
   exportFilename,
   exportGuideArtifact,
   ExportAction,
+  guideIsForging,
   GuideToolbarHeading,
   mergeGuideResponse,
   replaceGuideInHistory,
@@ -32,8 +33,9 @@ import {
   SidebarToggleIcon,
   workStateLabel,
 } from "./App";
-import type { GuideSummary, GuideView, SourceView } from "./api";
+import type { GuideSummary, GuideView, QueueRow, SourceView } from "./api";
 import type { ImageFile } from "./components/ImageGroupEditor";
+import { ForgingScreen } from "./components/ForgingScreen";
 import { artifactFetchOptions, GuideCard } from "./components/GuideCard";
 import { selectionRectInViewer as selectionRectInGuideViewer } from "./components/GuideCard";
 import { PdfRangeSelector } from "./components/PdfRangeSelector";
@@ -68,6 +70,28 @@ function exportGuide(overrides: Partial<GuideView> = {}): GuideView {
     findings: [],
     revision_count: 1,
     artifact_url: "/api/guides/guide-export/artifact.html",
+    ...overrides,
+  };
+}
+
+function guideRow(overrides: Partial<QueueRow> = {}): QueueRow {
+  return {
+    receipt: "a".repeat(32),
+    guide_id: "guide-export",
+    order: 1,
+    kind: "create",
+    state: "running",
+    created_at: "2026-09-19T00:00:00Z",
+    started_at: "2026-09-19T00:00:01Z",
+    finished_at: null,
+    retry_available: false,
+    error: null,
+    guide_name: "Cell Division",
+    activity: "writing",
+    attempt: 1,
+    lines: 120,
+    characters: 4_500,
+    last_output_at: "2026-09-19T00:01:00Z",
     ...overrides,
   };
 }
@@ -442,6 +466,38 @@ describe("Study Forge visual availability markers", () => {
 
     expect(restored.source_error).toBeUndefined();
     expect(stillUnavailable.source_error).toBe(unavailable.source_error);
+  });
+
+  it("shows the forging loop only while a guide without an artifact is running", () => {
+    const running = guideRow();
+    const guideWithoutArtifact = exportGuide({ status: "running", artifact_url: null });
+
+    expect(guideIsForging(running, guideWithoutArtifact)).toBe(true);
+    // Queued work keeps the plain waiting notice, and a guide that already has
+    // an artifact keeps it readable while the new version is written.
+    expect(guideIsForging(guideRow({ state: "waiting" }), guideWithoutArtifact)).toBe(false);
+    expect(guideIsForging(running, exportGuide({ status: "running" }))).toBe(false);
+    expect(guideIsForging(running, null)).toBe(false);
+    expect(guideIsForging(null, guideWithoutArtifact)).toBe(false);
+
+    const markup = renderToStaticMarkup(
+      <ForgingScreen detail="Writing the guide · 120 lines · 4,500 characters" />,
+    );
+
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain('aria-live="polite"');
+    expect(markup).toContain("Your guide is being forged");
+    expect(markup).toContain("Writing the guide · 120 lines · 4,500 characters");
+    expect(markup).toContain('class="forge-loop"');
+    expect(markup).toContain('viewBox="0 0 240 190"');
+    expect(markup).toContain('aria-hidden="true"');
+  });
+
+  it("renders the forging loop without a detail line when progress is unknown", () => {
+    const markup = renderToStaticMarkup(<ForgingScreen />);
+
+    expect(markup).toContain("Your guide is being forged");
+    expect(markup).not.toContain('class="forging-detail"');
   });
 
   it("renders the saved guide artifact preview inside the guide card", () => {

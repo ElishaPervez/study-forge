@@ -2687,6 +2687,139 @@ h3 {
   }
 }
 
+/* Forging loop: a flat 2D anvil strike shown while a guide is being written.
+   Ported from assets/forging-anvil.html; every name is forge-prefixed so the
+   shapes and keyframes cannot collide with the rest of the stylesheet. */
+.forging-screen {
+  --forge-cycle: 1700ms;
+  --forge-ink: var(--ink);
+  --forge-handle: #7b8496;
+  --forge-spark: #ef9d3f;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: min(58vh, 460px);
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.forge-loop {
+  width: min(46vw, 260px);
+  height: auto;
+  margin-bottom: 20px;
+  overflow: visible;
+}
+
+.forge-anvil,
+.forge-head {
+  fill: var(--forge-ink);
+}
+
+.forge-handle {
+  fill: var(--forge-handle);
+}
+
+.forge-anvil {
+  animation: forge-anvil-jolt var(--forge-cycle) linear infinite;
+}
+
+/* The handle is drawn from the pivot down, so rotating about the origin of
+   the hammer's own coordinate system is the whole rig. */
+.forge-hammer {
+  transform-box: view-box;
+  transform-origin: 0 0;
+  transform: translate(120px, 2px) rotate(-58deg);
+  animation: forge-swing var(--forge-cycle) infinite;
+}
+
+.forge-flash {
+  fill: var(--forge-spark);
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: forge-flash var(--forge-cycle) linear infinite;
+}
+
+.forge-spark {
+  fill: var(--forge-spark);
+  opacity: 0;
+  animation: forge-spark-fly var(--forge-cycle) linear infinite;
+}
+
+.forge-puff {
+  fill: var(--forge-ink);
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: forge-puff-up var(--forge-cycle) linear infinite;
+}
+
+.forging-kicker {
+  color: var(--muted);
+  font-family: "Geist Mono", monospace;
+  font-size: 0.58rem;
+}
+
+.forging-heading {
+  font-family: "Instrument Serif", Georgia, serif;
+  font-size: clamp(1.55rem, 2.6vw, 2.1rem);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+
+.forging-detail {
+  max-width: 26rem;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+/* timeline: strike at 58% */
+@keyframes forge-swing {
+  0%   { transform: translate(120px, 2px) rotate(-58deg); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+  26%  { transform: translate(120px, 2px) rotate(-62deg); animation-timing-function: linear; }
+  38%  { transform: translate(120px, 2px) rotate(-62deg); animation-timing-function: cubic-bezier(0.62, 0.02, 0.9, 0.4); }
+  58%  { transform: translate(120px, 2px) rotate(0deg); animation-timing-function: cubic-bezier(0.2, 0.7, 0.4, 1); }
+  /* the bounce lifts the hammer just clear of the face before it tips back */
+  64%  { transform: translate(120px, -1px) rotate(-6deg); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+  70%  { transform: translate(120px, 2px) rotate(0deg); animation-timing-function: cubic-bezier(0.5, 0, 0.4, 1); }
+  100% { transform: translate(120px, 2px) rotate(-58deg); }
+}
+
+@keyframes forge-anvil-jolt {
+  0%, 57%   { transform: translateY(0); }
+  59%       { transform: translateY(1.8px); }
+  62%       { transform: translateY(-0.7px); }
+  67%, 100% { transform: translateY(0); }
+}
+
+@keyframes forge-flash {
+  0%, 57.5% { opacity: 0; transform: scale(0.4); }
+  59%       { opacity: 1; transform: scale(1.1); }
+  64%       { opacity: 0; transform: scale(1.7); }
+  100%      { opacity: 0; transform: scale(0.4); }
+}
+
+@keyframes forge-spark-fly {
+  0%, 57.5% { opacity: 0; transform: translate(0, 0); }
+  58.5%     { opacity: 1; }
+  66%       { opacity: 1; transform: translate(calc(var(--forge-dx) * 0.55), calc(var(--forge-dy) * 0.55 + var(--forge-peak))); }
+  76%       { opacity: 0; transform: translate(var(--forge-dx), var(--forge-dy)); }
+  100%      { opacity: 0; transform: translate(var(--forge-dx), var(--forge-dy)); }
+}
+
+@keyframes forge-puff-up {
+  0%, 57%   { opacity: 0; transform: scale(0.5); }
+  60%       { opacity: 0.16; }
+  74%       { opacity: 0; transform: scale(3.4) translate(var(--forge-px, 0), var(--forge-py, -6px)); }
+  100%      { opacity: 0; transform: scale(0.5); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

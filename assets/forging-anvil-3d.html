@@ -1,0 +1,664 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Study Forge · forging loop</title>
+<!--
+  A self-contained "forging your guide" loop: a hammer strikes an anvil, forever.
+  No assets, no fonts to load, no network - open the file directly in a browser.
+
+  The rig is a two-joint arm so the head can land flat:
+    .swing   shoulder pivot, rotates the whole hammer along the arc
+    .hammer  wrist pivot, counter-rotates so the striking face meets the anvil
+
+  Both joints share one 2600ms cycle; the strike happens at 62% of it. The
+  keyframes, the constants in the script, and the impact effects all key off
+  that same 62% mark, so retiming the loop means editing one number in place.
+-->
+<style>
+  :root {
+    --cycle: 2600ms;
+    --steel-dark: #232833;
+    --forge: #ff8a2a;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: #06070a;
+  }
+
+  body {
+    display: grid;
+    place-items: center;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    user-select: none;
+    /* Warm-dark room behind the forge, so the anvil does not float in a void. */
+    background:
+      radial-gradient(
+        ellipse 64% 58% at 50% 46%,
+        rgba(74, 45, 31, 0.92),
+        rgba(26, 20, 21, 0.96) 50%,
+        rgba(5, 6, 9, 1) 100%
+      ),
+      #05060a;
+  }
+
+  /* ---------- stage ---------- */
+
+  .stage {
+    position: relative;
+    width: 900px;
+    height: 740px;
+    transform: scale(1);
+    transform-origin: center center;
+    pointer-events: none;
+  }
+
+  /* Warm bloom behind the anvil, brightest on impact. */
+  .bloom {
+    position: absolute;
+    left: 80px;
+    top: 150px;
+    width: 780px;
+    height: 640px;
+    background: radial-gradient(
+      ellipse 44% 40% at 52% 48%,
+      rgba(255, 146, 52, 0.40),
+      rgba(255, 100, 28, 0.14) 46%,
+      rgba(255, 80, 20, 0) 74%
+    );
+    filter: blur(8px);
+    animation: bloomPulse var(--cycle) linear infinite;
+  }
+
+  .vignette {
+    position: absolute;
+    inset: -40px;
+    background: radial-gradient(
+      ellipse 62% 58% at 50% 48%,
+      rgba(0, 0, 0, 0) 42%,
+      rgba(0, 0, 0, 0.55) 82%,
+      rgba(0, 0, 0, 0.78) 100%
+    );
+  }
+
+  .embers { position: absolute; inset: 0; }
+
+  .ember {
+    position: absolute;
+    width: var(--size);
+    height: var(--size);
+    border-radius: 50%;
+    background: radial-gradient(circle, #fff3d6 0%, rgba(255, 168, 72, 0.75) 45%, rgba(255, 110, 30, 0) 72%);
+    opacity: 0;
+    animation: emberRise var(--life) linear var(--delay) infinite;
+  }
+
+  @keyframes emberRise {
+    0%   { opacity: 0; transform: translate3d(0, 0, 0) scale(0.6); }
+    14%  { opacity: var(--alpha); }
+    68%  { opacity: var(--alpha); }
+    100% { opacity: 0; transform: translate3d(var(--drift), -260px, 0) scale(1.05); }
+  }
+
+  /* ---------- the 3d scene ---------- */
+
+  .scene {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 900px;
+    height: 740px;
+    margin: -370px 0 0 -450px;
+    transform-style: preserve-3d;
+    /* Camera: a touch above and to the right of the anvil. */
+    transform: rotateX(13deg) rotateY(-16deg);
+    animation: sceneKick var(--cycle) linear infinite;
+  }
+
+  .stage, .scene, .anvil, .swing, .hammer, .strike, .strike-plane, .box {
+    transform-style: preserve-3d;
+  }
+
+  /* A box is one element plus six faces generated from data-box="w h d". */
+  .box {
+    position: absolute;
+    width: var(--w);
+    height: var(--h);
+  }
+
+  .face { position: absolute; left: 0; top: 0; }
+
+  .face-front  { width: var(--w); height: var(--h); transform: translateZ(calc(var(--d) / 2)); }
+  .face-back   { width: var(--w); height: var(--h); transform: translateZ(calc(var(--d) / -2)); }
+
+  .face-right {
+    width: var(--d);
+    height: var(--h);
+    left: calc((var(--w) - var(--d)) / 2);
+    transform: translateX(calc(var(--w) / 2)) rotateY(90deg);
+  }
+
+  .face-left {
+    width: var(--d);
+    height: var(--h);
+    left: calc((var(--w) - var(--d)) / 2);
+    transform: translateX(calc(var(--w) / -2)) rotateY(-90deg);
+  }
+
+  .face-top {
+    width: var(--w);
+    height: var(--d);
+    top: calc((var(--h) - var(--d)) / 2);
+    transform: translateY(calc(var(--h) / -2)) rotateX(90deg);
+  }
+
+  .face-bottom {
+    width: var(--w);
+    height: var(--d);
+    top: calc((var(--h) - var(--d)) / 2);
+    transform: translateY(calc(var(--h) / 2)) rotateX(-90deg);
+  }
+
+  /* ---------- materials ---------- */
+
+  [data-mat="anvil"] .face-front  { background: linear-gradient(180deg, #616c80 0%, #495163 42%, #363d4b 100%); }
+  [data-mat="anvil"] .face-back   { background: #272c37; }
+  [data-mat="anvil"] .face-right  { background: linear-gradient(180deg, #4b5466, #2f3541 70%, #252a34); }
+  [data-mat="anvil"] .face-left   { background: linear-gradient(180deg, #414a59, #262b34); }
+  [data-mat="anvil"] .face-top    { background: linear-gradient(180deg, #949db2, #69728a 58%, #545c70); }
+  [data-mat="anvil"] .face-bottom { background: #171b21; }
+
+  /* Forge light catching the upper edge of every anvil part. */
+  [data-mat="anvil"] .face-front::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(255, 150, 70, 0.26), rgba(255, 150, 70, 0) 58%);
+  }
+
+  [data-mat="handle"] .face-front { background: linear-gradient(90deg, #4d3120, #a9773f 36%, #8a5f34 62%, #48301e); }
+  [data-mat="handle"] .face-back  { background: #3f2a1a; }
+  [data-mat="handle"] .face-right { background: linear-gradient(180deg, #8a5f34, #4a3120); }
+  [data-mat="handle"] .face-left  { background: linear-gradient(180deg, #7d5530, #3f2a1a); }
+  [data-mat="handle"] .face-top   { background: linear-gradient(180deg, #c08a4a, #6d4a2a); }
+  [data-mat="handle"] .face-bottom{ background: #33220f; }
+
+  [data-mat="steel"] .face-front  { background: linear-gradient(180deg, #a6aec0, #6c7488 52%, #525a6b); }
+  [data-mat="steel"] .face-back   { background: #3a404c; }
+  [data-mat="steel"] .face-right  { background: linear-gradient(180deg, #798294, #454c5a); }
+  [data-mat="steel"] .face-left   { background: linear-gradient(180deg, #6d7589, #3f4553); }
+  [data-mat="steel"] .face-top    { background: linear-gradient(180deg, #c6ccda, #7f8899); }
+  /* The striking face: polished, and hot right after a hit. */
+  [data-mat="steel"] .face-bottom { background: linear-gradient(180deg, #8f98aa, #4a515f); }
+  [data-mat="steel"] .face-bottom::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 50% 50%, rgba(255, 176, 92, 0.85), rgba(255, 120, 40, 0) 70%);
+    opacity: 0;
+    animation: headHeat var(--cycle) linear infinite;
+  }
+
+  /* The forge floor: a warm pool of light with the anvil's shadow in it. */
+  .floor {
+    position: absolute;
+    left: 100px;
+    top: 366px;
+    width: 700px;
+    height: 460px;
+    transform: rotateX(90deg);
+    background:
+      radial-gradient(ellipse 40% 30% at 44% 50%, rgba(0, 0, 0, 0.66), rgba(0, 0, 0, 0) 70%),
+      radial-gradient(
+        ellipse 48% 44% at 46% 50%,
+        rgba(255, 158, 78, 0.32),
+        rgba(255, 116, 44, 0.11) 48%,
+        rgba(255, 90, 30, 0) 74%
+      );
+  }
+
+  /* ---------- anvil ---------- */
+
+  .anvil {
+    position: absolute;
+    left: 330px;
+    top: 430px;
+    animation: anvilKick var(--cycle) linear infinite;
+  }
+
+  /* The working face heats up on every strike. */
+  .anvil .face-top::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 42% 40% at 66% 50%, rgba(255, 176, 84, 0.9), rgba(255, 110, 30, 0) 72%);
+    opacity: 0.2;
+    animation: faceHeat var(--cycle) linear infinite;
+  }
+
+  .horn-face {
+    position: absolute;
+    clip-path: polygon(100% 0%, 100% 100%, 0% 50%);
+  }
+
+  .horn-front {
+    left: -92px;
+    top: 6px;
+    width: 96px;
+    height: 60px;
+    background: linear-gradient(180deg, #4a5364, #2f3541);
+    transform: translateZ(38px);
+  }
+
+  .horn-back {
+    left: -92px;
+    top: 6px;
+    width: 96px;
+    height: 60px;
+    background: #1e232c;
+    transform: translateZ(-38px);
+  }
+
+  /* The sloped top of the horn, tilted to meet the face plate. */
+  .horn-ramp {
+    left: -94.3px;
+    top: -17px;
+    width: 100.6px;
+    height: 76px;
+    background: linear-gradient(90deg, #59627a, #8089a0 70%, #8f97ad);
+    transform: rotateZ(-17.35deg) rotateX(90deg);
+  }
+
+  /* ---------- strike effects ---------- */
+
+  /* Zero-size anchor at the point the head meets the anvil. */
+  .strike {
+    position: absolute;
+    left: 441.8px;
+    top: 430px;
+    width: 0;
+    height: 0;
+  }
+
+  /* Pulled out in front of the anvil's face plate (z = 52) so nothing occludes it. */
+  .strike-plane {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+    transform: translateZ(58px);
+  }
+
+  .flash {
+    position: absolute;
+    left: -70px;
+    top: -70px;
+    width: 140px;
+    height: 140px;
+    border-radius: 50%;
+    background: radial-gradient(
+      circle,
+      rgba(255, 252, 235, 0.95) 0%,
+      rgba(255, 196, 104, 0.72) 26%,
+      rgba(255, 132, 40, 0.28) 52%,
+      rgba(255, 110, 30, 0) 72%
+    );
+    opacity: 0;
+    animation: flashPulse var(--cycle) linear infinite;
+  }
+
+  .shock {
+    position: absolute;
+    left: -34px;
+    top: -34px;
+    width: 68px;
+    height: 68px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 196, 116, 0.9);
+    opacity: 0;
+    animation: shockRing var(--cycle) linear infinite;
+  }
+
+  .puff {
+    position: absolute;
+    left: -26px;
+    top: -26px;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(190, 184, 178, 0.5), rgba(150, 145, 140, 0) 70%);
+    opacity: 0;
+    animation: puffOut var(--cycle) linear infinite;
+  }
+
+  .puff-2 { animation-delay: 40ms; }
+  .puff-3 { animation-delay: 90ms; }
+
+  .spark {
+    position: absolute;
+    width: var(--size, 3px);
+    height: var(--size, 3px);
+    margin: calc(var(--size, 3px) / -2) 0 0 calc(var(--size, 3px) / -2);
+    border-radius: 50%;
+    background: radial-gradient(circle, #fff8e4 0%, #ffc46b 42%, rgba(255, 120, 30, 0) 74%);
+    box-shadow: 0 0 7px rgba(255, 172, 74, 0.85);
+    animation: sparkFly var(--life, 800ms) cubic-bezier(0.18, 0.72, 0.42, 1) forwards;
+  }
+
+  /* A few sparks are little molten streaks instead of dots. */
+  .spark.is-streak {
+    height: calc(var(--size, 3px) * 3.2);
+    margin-top: calc(var(--size, 3px) * -1.6);
+  }
+
+  /* ---------- hammer rig ---------- */
+
+  /* Shoulder: the arc. Wrist: the snap that lands the face flat. */
+  .swing {
+    position: absolute;
+    left: 330px;
+    top: 200px;
+    width: 0;
+    height: 0;
+    transform-origin: 0 0;
+    animation: swingArm var(--cycle) infinite;
+  }
+
+  .hammer {
+    position: absolute;
+    left: 0;
+    top: 150px;
+    width: 0;
+    height: 0;
+    transform-origin: 0 0;
+    animation: wristSnap var(--cycle) infinite;
+  }
+
+  /* ---------- timeline: strike at 62% ---------- */
+
+  @keyframes swingArm {
+    0%   { transform: rotateZ(-100deg); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+    30%  { transform: rotateZ(-104deg); animation-timing-function: linear; }
+    42%  { transform: rotateZ(-104deg); animation-timing-function: cubic-bezier(0.62, 0.02, 0.88, 0.42); }
+    62%  { transform: rotateZ(-48.2deg); animation-timing-function: cubic-bezier(0.22, 0.66, 0.4, 1); }
+    68%  { transform: rotateZ(-50.4deg); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+    74%  { transform: rotateZ(-48.2deg); animation-timing-function: cubic-bezier(0.5, 0, 0.4, 1); }
+    100% { transform: rotateZ(-100deg); }
+  }
+
+  @keyframes wristSnap {
+    0%   { transform: rotateZ(-20deg); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+    30%  { transform: rotateZ(-22deg); animation-timing-function: linear; }
+    42%  { transform: rotateZ(-22deg); animation-timing-function: cubic-bezier(0.5, 0, 0.9, 0.4); }
+    54%  { transform: rotateZ(16deg); animation-timing-function: cubic-bezier(0.22, 0.66, 0.4, 1); }
+    62%  { transform: rotateZ(48.2deg); animation-timing-function: cubic-bezier(0.22, 0.66, 0.4, 1); }
+    68%  { transform: rotateZ(43deg); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+    74%  { transform: rotateZ(48.2deg); animation-timing-function: cubic-bezier(0.5, 0, 0.4, 1); }
+    100% { transform: rotateZ(-20deg); }
+  }
+
+  @keyframes anvilKick {
+    0%, 61%  { transform: translate3d(0, 0, 0); }
+    62.5%    { transform: translate3d(0, 2.5px, 0); }
+    65%      { transform: translate3d(0, -1px, 0); }
+    70%, 100%{ transform: translate3d(0, 0, 0); }
+  }
+
+  @keyframes sceneKick {
+    0%, 61%  { transform: rotateX(13deg) rotateY(-16deg) translate3d(0, 0, 0); }
+    62.5%    { transform: rotateX(13deg) rotateY(-16deg) translate3d(0, 3px, 0); }
+    66%      { transform: rotateX(13deg) rotateY(-16deg) translate3d(0, -1px, 0); }
+    70%, 100%{ transform: rotateX(13deg) rotateY(-16deg) translate3d(0, 0, 0); }
+  }
+
+  @keyframes flashPulse {
+    0%, 61%  { opacity: 0; transform: scale(0.5); }
+    63%      { opacity: 0.95; transform: scale(1.1); }
+    68%      { opacity: 0; transform: scale(1.45); }
+    100%     { opacity: 0; transform: scale(0.5); }
+  }
+
+  @keyframes shockRing {
+    0%, 61.5%{ opacity: 0; transform: scale(0.25); }
+    63%      { opacity: 0.8; transform: scale(0.9); }
+    73%      { opacity: 0; transform: scale(2.7); }
+    100%     { opacity: 0; transform: scale(0.25); }
+  }
+
+  @keyframes puffOut {
+    0%, 61%  { opacity: 0; transform: translate3d(0, 0, 0) scale(0.4); }
+    64%      { opacity: 0.28; }
+    80%      { opacity: 0; transform: translate3d(var(--px, 0), var(--py, -40px), 0) scale(2.6); }
+    100%     { opacity: 0; transform: translate3d(var(--px, 0), var(--py, -40px), 0) scale(2.6); }
+  }
+
+  @keyframes faceHeat {
+    0%, 61%  { opacity: 0.2; }
+    63.5%    { opacity: 1; }
+    72%      { opacity: 0.42; }
+    100%     { opacity: 0.2; }
+  }
+
+  @keyframes headHeat {
+    0%, 61%  { opacity: 0; }
+    62.5%    { opacity: 0.9; }
+    70%      { opacity: 0; }
+    100%     { opacity: 0; }
+  }
+
+  @keyframes bloomPulse {
+    0%, 60%  { opacity: 0.8; }
+    63%      { opacity: 1; }
+    74%      { opacity: 0.8; }
+    100%     { opacity: 0.8; }
+  }
+
+  @keyframes sparkFly {
+    0%   { opacity: 1; transform: translate3d(0, 0, 0) rotate(var(--rot, 0deg)) scale(1); }
+    42%  { opacity: 1; transform: translate3d(calc(var(--dx) * 0.52), calc(var(--dy) * 0.52 - var(--peak)), 0) rotate(var(--rot, 0deg)) scale(1); }
+    100% { opacity: 0; transform: translate3d(var(--dx), var(--dy), 0) rotate(var(--rot, 0deg)) scale(0.45); }
+  }
+
+  /* ---------- settled poses (also what a still frame or reduced motion shows) ---------- */
+
+  .swing  { transform: rotateZ(-100deg); }
+  .hammer { transform: rotateZ(-20deg); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .swing, .hammer, .anvil, .scene, .bloom,
+    .flash, .shock, .puff, .ember,
+    [data-mat="anvil"] .face-top::after,
+    [data-mat="steel"] .face-bottom::after {
+      animation: none;
+    }
+    .flash, .shock, .puff, .ember { opacity: 0; }
+    [data-mat="anvil"] .face-top::after { opacity: 0.2; }
+  }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <div class="bloom"></div>
+  <div class="embers" id="embers"></div>
+
+  <div class="scene">
+    <div class="floor"></div>
+
+    <div class="anvil" data-mat="anvil">
+      <!-- working face, horn, heel, body, waist, base, plinth -->
+      <div class="box" data-box="170 20 104" style="left:0px;top:0px"></div>
+      <div class="horn-face horn-back"></div>
+      <div class="horn-ramp horn-face"></div>
+      <div class="horn-face horn-front"></div>
+      <div class="box" data-box="84 16 84" style="left:168px;top:4px"></div>
+      <div class="box" data-box="230 50 96" style="left:10px;top:20px"></div>
+      <div class="box" data-box="84 52 68" style="left:78px;top:70px"></div>
+      <div class="box" data-box="160 24 104" style="left:40px;top:122px"></div>
+      <div class="box" data-box="196 18 124" style="left:22px;top:146px"></div>
+    </div>
+
+    <div class="strike">
+      <div class="strike-plane">
+        <div class="flash"></div>
+        <div class="shock"></div>
+        <div class="puff puff-1" style="--px:-26px;--py:-46px"></div>
+        <div class="puff puff-2" style="--px:34px;--py:-58px"></div>
+        <div class="puff puff-3" style="--px:6px;--py:-70px"></div>
+        <div class="sparks" id="sparks"></div>
+      </div>
+    </div>
+
+    <div class="swing" id="swing">
+      <div class="hammer">
+        <div class="box" data-mat="handle" data-box="20 70 20" style="left:-10px;top:0px"></div>
+        <div class="box" data-mat="steel" data-box="32 14 32" style="left:-16px;top:64px"></div>
+        <div class="box" data-mat="steel" data-box="84 60 66" style="left:-42px;top:70px"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="vignette"></div>
+</div>
+
+<script>
+  "use strict";
+
+  // Mirrors --cycle in the stylesheet and the 62% strike mark in the keyframes.
+  var CYCLE = 2600;
+  var IMPACT = 0.62;
+
+  // Every box is one element; its six faces come from data-box="w h d".
+  document.querySelectorAll("[data-box]").forEach(function (box) {
+    var parts = box.dataset.box.split(" ").map(Number);
+    box.style.setProperty("--w", parts[0] + "px");
+    box.style.setProperty("--h", parts[1] + "px");
+    box.style.setProperty("--d", parts[2] + "px");
+    ["front", "back", "right", "left", "top", "bottom"].forEach(function (side) {
+      var face = document.createElement("span");
+      face.className = "face face-" + side;
+      box.appendChild(face);
+    });
+  });
+
+  // The scene is a fixed 900x740 so the 3D maths stays readable; fit it to the
+  // window instead of reflowing it.
+  var stage = document.getElementById("stage");
+  function fitStage() {
+    var scale = Math.min(window.innerWidth / 980, window.innerHeight / 820, 1.35);
+    stage.style.transform = "scale(" + Math.max(0.2, scale) + ")";
+  }
+  fitStage();
+  window.addEventListener("resize", fitStage);
+
+  // Ambient embers, screen space, forever.
+  var emberLayer = document.getElementById("embers");
+  for (var i = 0; i < 24; i += 1) {
+    var ember = document.createElement("span");
+    ember.className = "ember";
+    ember.style.left = 14 + Math.random() * 72 + "%";
+    ember.style.top = 52 + Math.random() * 44 + "%";
+    ember.style.setProperty("--size", (2 + Math.random() * 3.4).toFixed(2) + "px");
+    ember.style.setProperty("--drift", (Math.random() * 90 - 45).toFixed(0) + "px");
+    ember.style.setProperty("--alpha", (0.25 + Math.random() * 0.5).toFixed(2));
+    ember.style.setProperty("--life", (6200 + Math.random() * 5200).toFixed(0) + "ms");
+    ember.style.setProperty("--delay", (Math.random() * 9000).toFixed(0) + "ms");
+    emberLayer.appendChild(ember);
+  }
+
+  // Sparks are spawned on the hit and swept up by animationend, so nothing
+  // idles in the DOM between strikes.
+  var swing = document.getElementById("swing");
+  var sparkLayer = document.getElementById("sparks");
+  var sparkTimer = null;
+
+  function flySparks() {
+    if (document.hidden) return;
+    var count = 16 + Math.round(Math.random() * 10);
+    for (var s = 0; s < count; s += 1) {
+      // A fan around straight up, so sparks cross in front of the hammer head.
+      var angle = (-90 + (Math.random() - 0.5) * 195) * (Math.PI / 180);
+      var reach = 55 + Math.random() * 205;
+      var size = 2 + Math.random() * 2.6;
+      var spark = document.createElement("span");
+      spark.className = "spark";
+      spark.style.setProperty("--size", size.toFixed(2) + "px");
+      spark.style.setProperty("--dx", (Math.cos(angle) * reach).toFixed(1) + "px");
+      spark.style.setProperty("--dy", (Math.sin(angle) * reach + 70 + Math.random() * 110).toFixed(1) + "px");
+      spark.style.setProperty("--peak", (12 + Math.random() * 58).toFixed(1) + "px");
+      spark.style.setProperty("--rot", (angle * 180 / Math.PI + 90).toFixed(0) + "deg");
+      spark.style.setProperty("--life", (520 + Math.random() * 640).toFixed(0) + "ms");
+      if (Math.random() < 0.35) spark.classList.add("is-streak");
+      spark.addEventListener("animationend", function () { this.remove(); });
+      sparkLayer.appendChild(spark);
+    }
+  }
+
+  function scheduleSparks() {
+    window.clearTimeout(sparkTimer);
+    sparkTimer = window.setTimeout(flySparks, CYCLE * IMPACT);
+  }
+
+  swing.addEventListener("animationstart", function (event) {
+    if (event.animationName === "swingArm") scheduleSparks();
+  });
+  swing.addEventListener("animationiteration", function (event) {
+    if (event.animationName === "swingArm") scheduleSparks();
+  });
+  scheduleSparks();
+
+  // ?debug: freeze the loop at ?debug=<ms> and report where the striking face
+  // actually lands, so the rig can be checked without eyeballing a screenshot.
+  var debug = new URLSearchParams(location.search).get("debug");
+  if (debug !== null) {
+    var at = Number(debug) || 0;
+    var contact = document.createElement("span");
+    contact.style.cssText = "position:absolute;left:0;top:130px;width:1px;height:1px;background:#0f0";
+    document.querySelector(".hammer").appendChild(contact);
+    var face = document.createElement("span");
+    face.style.cssText = "position:absolute;left:111.8px;top:0;width:1px;height:1px;background:#f00";
+    document.querySelector(".anvil").appendChild(face);
+    requestAnimationFrame(function () {
+      document.getAnimations().forEach(function (animation) {
+        animation.pause();
+        animation.currentTime = at;
+      });
+      var hit = contact.getBoundingClientRect();
+      var target = face.getBoundingClientRect();
+      var headBoxes = document.querySelectorAll(".hammer .box");
+      var head = headBoxes[headBoxes.length - 1].getBoundingClientRect();
+      var report = document.createElement("pre");
+      report.id = "report";
+      var sheet = stage.getBoundingClientRect();
+      report.textContent = JSON.stringify({
+        at: at,
+        stage: {
+          w: +sheet.width.toFixed(0),
+          h: +sheet.height.toFixed(0),
+          left: +sheet.left.toFixed(0),
+          top: +sheet.top.toFixed(0)
+        },
+        contact: { x: +hit.x.toFixed(1), y: +hit.y.toFixed(1) },
+        anvilFace: { x: +target.x.toFixed(1), y: +target.y.toFixed(1) },
+        gapY: +(hit.y - target.y).toFixed(1),
+        head: {
+          left: +head.left.toFixed(0),
+          top: +head.top.toFixed(0),
+          right: +head.right.toFixed(0),
+          bottom: +head.bottom.toFixed(0)
+        }
+      });
+      report.style.cssText = "position:fixed;left:8px;top:8px;color:#9fe;font:12px monospace;z-index:9";
+      document.body.appendChild(report);
+    });
+  }
+</script>
+</body>
+</html>

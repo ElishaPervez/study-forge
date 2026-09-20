@@ -11,13 +11,14 @@ import {
   type QueueRow,
   type SourceView,
 } from "./api";
-import { GenerationQueue } from "./components/GenerationQueue";
+import { GenerationQueue, progressDetail } from "./components/GenerationQueue";
 import { useGenerationQueue } from "./useGenerationQueue";
 import {
   artifactFetchOptions,
   GuideCard,
   type GuideFrameSelection,
 } from "./components/GuideCard";
+import { ForgingScreen } from "./components/ForgingScreen";
 import { HistoryList } from "./components/HistoryList";
 import { PdfRangeSelector, type PdfSelection } from "./components/PdfRangeSelector";
 import { RevisionPopup } from "./components/RevisionPopup";
@@ -525,6 +526,19 @@ export function queueRowForGuide(rows: QueueRow[], guideId: string | null): Queu
   return (active.length > 0 ? active : [...own].sort((a, b) => b.order - a.order))[0];
 }
 
+/**
+ * The forging loop stands in for a study guide that has nothing to show yet.
+ * It runs only while the request is actually being written: queued work keeps
+ * the plain waiting notice, and a guide that already has an artifact keeps that
+ * artifact readable while it is updated.
+ */
+export function guideIsForging(row: QueueRow | null, guide: GuideView | null): boolean {
+  return row !== null
+    && row.state === "running"
+    && guide !== null
+    && guide.artifact_url === null;
+}
+
 /** What the Study guide area says while this guide's request is queued or running. */
 export function queueRowNotice(row: QueueRow | null): string | null {
   if (row === null) return null;
@@ -737,6 +751,7 @@ export function App() {
   const sourceControlsDisabled = sourceBusy || selectedGuideReadOnly;
   const selectedQueueRow = queueRowForGuide(queue.rows, guide?.guide_id ?? null);
   const selectedGuideNotice = queueRowNotice(selectedQueueRow);
+  const forgingRow = guideIsForging(selectedQueueRow, guide) ? selectedQueueRow : null;
   const canForge = canForgeStudyGuide(
     startupState === "ready",
     api !== null,
@@ -1439,6 +1454,8 @@ export function App() {
                   onSelectionChange={handleViewerSelectionChange}
                   onSourceError={handleSourceError}
                 />
+              ) : activeTab === "guide" && guide !== null && forgingRow !== null ? (
+                <ForgingScreen detail={progressDetail(forgingRow)} />
               ) : activeTab === "guide" && guide !== null ? (
                 <>
                 {selectedGuideNotice !== null ? (
