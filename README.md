@@ -49,7 +49,7 @@ the same bytes from the same render path.
 ## Layout
 
 ```
-backend/            Python service (no framework beyond FastAPI + pydantic)
+backend/            Python service (FastAPI + pydantic + latex2mathml)
   settings.py       Settings dataclass; .env reader; pinned model knobs
   api/              app.py (all routes), __main__.py (uvicorn + port announcement)
   ingest/pdf.py     PDF rasterisation/caching, image normalisation, page previews
@@ -65,6 +65,7 @@ backend/            Python service (no framework beyond FastAPI + pydantic)
   skill/manifest.py reference manifest from references/*.md
   verify/self_check.py  runs the skill's shipped self_check.py over a candidate artifact
   fonts/embed.py    base64 @font-face injection; strips Google Fonts <link>s
+  mathml/render.py  LaTeX delimiters in guide text -> native MathML, at build time
 
 desktop/            Electron shell + React renderer (TypeScript, Vite)
   src/main.ts       backend lifecycle, IPC handlers, window creation
@@ -116,6 +117,14 @@ provider's request-body limit. The viewer uses a separate `previews/` cache from
   `needs-attention` means an artifact exists but a check failed.
 - Guides left `pending/running/verifying/repairing` by a previous process are marked `failed`
   with a retry message on the next read (`recover_interrupted_guides`).
+
+**Math** (`backend/mathml/render.py`) is rendered at build time, never at view time. The model
+writes LaTeX between `\(...\)` (inline) and `\[...\]` (display), and generation rewrites those
+delimiters into browser-native MathML before the artifact is verified, so nothing ships with
+the file: no math library, no math web font, no network request. Only text is rewritten —
+markup, attributes, and the contents of `script`/`style`/`svg`/`code`/`pre`/`math` are copied
+through byte for byte, and an expression the converter cannot render stays as the author
+wrote it instead of becoming malformed markup.
 
 **Output policy** is enforced in code, not just in the prompt: a complete single `<html>`
 document, no content outside it, no `<base>/<embed>/<object>/<iframe>`, no `on*` attributes or
@@ -192,7 +201,8 @@ API key.
 
 ```bash
 # 1. API key (required; no key = startup failure with exit code 2)
-printf 'OPENROUTER_API_KEY=sk-...\n' > .env     # optional: SKILL_DIR=diagram-design, JOBS_DIR=jobs
+cp .env.example .env                            # then fill in OPENROUTER_API_KEY
+                                                # optional: SKILL_DIR=diagram-design, JOBS_DIR=jobs
 
 # 2. Backend alone (prints LESSON_GEN_PORT=<port>, then serves on 127.0.0.1)
 uv run python -m backend.api
@@ -215,14 +225,14 @@ main process with `taskkill //PID <pid> //T //F`.
 ## Tests and lint
 
 ```bash
-uv run pytest -q            # 210 backend tests
+uv run pytest -q            # 247 backend tests
 uv run ruff check .         # line-length 100
 cd desktop && npm test      # builds, then vitest (169 tests)
 cd desktop && npm run build # tsc for main/preload/renderer, then vite bundle
 ```
 
 Backend tests mirror the modules (`tests/api`, `tests/generate`, `tests/ingest`, `tests/jobs`,
-`tests/llm`, `tests/prompt`, `tests/skill`, `tests/verify`, `tests/fonts`) and drive the app
+`tests/llm`, `tests/prompt`, `tests/skill`, `tests/verify`, `tests/fonts`, `tests/mathml`) and drive the app
 through `fastapi.testclient` with a scripted LLM and `httpx.MockTransport`, so no network or API
 key is needed. Renderer tests cover the extracted pure helpers (placement, clamping, filename
 sanitising, drop-session state, export flow) alongside component-render assertions.

@@ -177,6 +177,22 @@ def test_font_css_is_injected_before_the_artifact_is_published(tmp_path: Path) -
     assert css in written
 
 
+def test_latex_in_the_reply_is_rendered_before_the_artifact_is_published(tmp_path: Path) -> None:
+    candidate = GOOD.replace(
+        "</body>", '<p>Heat \\(Q = mc\\Delta T\\).</p></body>', 1
+    )
+    llm = ScriptedLLM([LLMReply(text=candidate)])
+
+    result = generate_unit(_request(tmp_path), llm=llm, bundle=load_bundle(SKILL_DIR),
+                           fonts_css="", out_dir=tmp_path / "out")
+
+    assert result.status is UnitStatus.OK
+    written = result.artifact_path.read_text(encoding="utf-8")
+    assert "<math" in written
+    assert "display=\"inline\"" in written
+    assert "\\(" not in written
+
+
 def test_embedded_css_data_urls_are_allowed(tmp_path: Path) -> None:
     css = (
         "@font-face{font-family:'Instrument Serif';"

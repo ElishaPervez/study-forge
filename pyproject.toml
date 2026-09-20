@@ -9,6 +9,7 @@ dependencies = [
   "pillow",
   "httpx",
   "pydantic",
+  "latex2mathml>=3.81.1",
 ]
 
 [dependency-groups]

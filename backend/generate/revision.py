@@ -23,6 +23,7 @@ from backend.generate.unit import (
 from backend.ingest.source import source_inputs
 from backend.jobs.schema import Selection, SourceAsset
 from backend.llm.client import LLM, LLMError, LLMReply, image_part
+from backend.mathml.render import render_math
 from backend.prompt.build import build_revision_message
 from backend.skill.bundle import Bundle
 from backend.verify.self_check import CheckResult, run_self_check
@@ -130,7 +131,7 @@ def revise_guide(
             messages.append({"role": "user", "content": _empty_reply_prompt(last_findings[0])})
             continue
 
-        candidate = inject_fonts(_strip_fences(reply.text or ""), fonts_css)
+        candidate = inject_fonts(render_math(_strip_fences(reply.text or "")), fonts_css)
         findings = _validated_findings(candidate, bundle.skill_dir, checker)
         if not findings:
             return RevisionResult(candidate, calls, list(requested), [])

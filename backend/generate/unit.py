@@ -15,6 +15,7 @@ from backend.fonts.embed import inject_fonts
 from backend.ingest.pdf import InputImage
 from backend.jobs.schema import Selection, SourceKind
 from backend.llm.client import LLM, LLMError, LLMReply, ToolCall, image_part
+from backend.mathml.render import render_math
 from backend.prompt.build import build_initial_message, build_unit_message
 from backend.skill.bundle import Bundle
 from backend.skill.manifest import get_reference
@@ -622,7 +623,7 @@ def generate_unit(
                 status_callback(UnitStatus.REPAIRING)
             continue
 
-        html = inject_fonts(_strip_fences(reply.text or ""), fonts_css)
+        html = inject_fonts(render_math(_strip_fences(reply.text or "")), fonts_css)
         _write_atomic(artifact_path, html)
         published = True
         if status_callback is not None:

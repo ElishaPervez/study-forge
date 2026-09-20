@@ -17,6 +17,17 @@ def test_unit_message_names_the_pages_and_nothing_volatile() -> None:
     assert build_unit_message("Unit 2 — Cell Division", [7, 8, 9]) == message
 
 
+def test_math_instructions_reach_the_model_verbatim() -> None:
+    message = build_unit_message("Unit 2 — Cell Division", [7, 8, 9])
+
+    assert "\\(" in message and "\\)" in message
+    assert "\\[" in message and "\\]" in message
+    assert "MathML" in message
+    # A non-raw string would swallow \f as a form feed and \t as a tab.
+    assert "\f" not in message
+    assert "\t" not in message
+
+
 def test_initial_message_has_fixed_source_instructions_and_no_custom_prompt() -> None:
     message = build_initial_message("pdf", 3, {"mode": "custom", "start": 7, "end": 9})
 
