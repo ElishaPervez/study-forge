@@ -97,7 +97,7 @@ def _error_diagnostic(error: BaseException) -> str:
 
 
 def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
-    app = FastAPI(title="Lesson Generator")
+    app = FastAPI(title="Study Forge")
     app.state.started_at = datetime.now(UTC)
     bundle = load_bundle(settings.skill_dir)
     fonts_css = default_fonts_css()

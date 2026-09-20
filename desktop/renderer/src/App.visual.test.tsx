@@ -614,7 +614,7 @@ describe("Study Forge visual availability markers", () => {
     const globalScope = globalThis as { window?: unknown };
     const originalWindow = globalScope.window;
     globalScope.window = {
-      lessonGen: {
+      studyForge: {
         minimizeWindow: vi.fn(),
         toggleMaximizeWindow: vi.fn(),
         isWindowMaximized: vi.fn().mockResolvedValue(false),

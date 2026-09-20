@@ -2,7 +2,7 @@ export {};
 
 declare global {
   interface Window {
-    lessonGen?: {
+    studyForge?: {
       port: () => Promise<number | null>;
       startBackend: () => Promise<number>;
       pickSourceFiles: () => Promise<string[]>;

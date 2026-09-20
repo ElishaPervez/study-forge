@@ -42,7 +42,7 @@ def test_main_announces_the_bound_socket_before_serving(
 
     assert entrypoint.main() == 0
 
-    assert capsys.readouterr().out == "LESSON_GEN_PORT=53124\n"
+    assert capsys.readouterr().out == "STUDY_FORGE_PORT=53124\n"
     assert events[-1] == ("run", [bound_socket])
     assert events.index("bind") < events.index(("run", [bound_socket]))
 

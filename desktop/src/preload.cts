@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "ele
 
 const pickSourceFiles = (): Promise<string[]> => ipcRenderer.invoke("source:pick");
 
-contextBridge.exposeInMainWorld("lessonGen", {
+contextBridge.exposeInMainWorld("studyForge", {
   port: (): Promise<number | null> => ipcRenderer.invoke("backend:port"),
   startBackend: (): Promise<number> => ipcRenderer.invoke("backend:start"),
   pickSourceFiles,

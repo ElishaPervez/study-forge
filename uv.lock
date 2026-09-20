@@ -132,7 +132,7 @@ wheels = [
 ]
 
 [[package]]
-name = "lesson-generator"
+name = "study-forge"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

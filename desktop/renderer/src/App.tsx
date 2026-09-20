@@ -662,10 +662,10 @@ export function App() {
 
     const loadPort = async () => {
       try {
-        if (!window.lessonGen) {
+        if (!window.studyForge) {
           throw new Error("The desktop bridge is unavailable.");
         }
-        const port = await window.lessonGen.startBackend();
+        const port = await window.studyForge.startBackend();
         if (active) {
           const nextBaseUrl = `http://127.0.0.1:${port}`;
           const serviceApi = createApi(nextBaseUrl);
@@ -727,8 +727,8 @@ export function App() {
   // Global window drop: routes through the same validated intake path as the
   // rail drop card (`classifySourcePaths` -> `handlePathsSelected`).
   const handleWindowFilesDropped = useCallback((files: File[]) => {
-    if (!window.lessonGen) return;
-    const paths = files.map((file) => window.lessonGen?.pathForFile(file) ?? "")
+    if (!window.studyForge) return;
+    const paths = files.map((file) => window.studyForge?.pathForFile(file) ?? "")
       .filter((path) => path.length > 0);
     if (paths.length === 0) {
       setSourceError("Choose one PDF or one or more images.");
@@ -951,7 +951,7 @@ export function App() {
 
   const handleExport = async () => {
     if (!canExport || baseUrl === null || guide === null || exportBusyRef.current) return;
-    const saveArtifact = window.lessonGen?.saveArtifact;
+    const saveArtifact = window.studyForge?.saveArtifact;
     if (saveArtifact === undefined) {
       setExportFeedback({ kind: "error", message: "The desktop save bridge is unavailable." });
       return;

@@ -240,7 +240,7 @@ function requestShutdown(): void {
   shutdownPromise = stopBackend().then((stopped) => {
     if (!stopped) {
       shutdownPromise = null;
-      dialog.showErrorBox("Lesson Generator", BACKEND_STOP_FAILURE_MESSAGE);
+      dialog.showErrorBox("Study Forge", BACKEND_STOP_FAILURE_MESSAGE);
       return false;
     }
     app.quit();
@@ -337,7 +337,7 @@ app.whenReady().then(async () => {
   try {
     await loadMainWindow();
   } catch (error: unknown) {
-    dialog.showErrorBox("Lesson Generator", `Could not load the application: ${errorMessage(error)}`);
+    dialog.showErrorBox("Study Forge", `Could not load the application: ${errorMessage(error)}`);
     app.quit();
   }
 });

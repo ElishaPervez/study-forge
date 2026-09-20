@@ -37,7 +37,7 @@ describe("waitForPort", () => {
     const child = new FakeProcess();
     const result = waitForPort(child, 1000);
 
-    child.writeStdout("INFO: starting backend\nLESSON_GEN_");
+    child.writeStdout("INFO: starting backend\nSTUDY_FORGE_");
     child.writeStdout("PORT=53124\n");
 
     await expect(result).resolves.toBe(53124);

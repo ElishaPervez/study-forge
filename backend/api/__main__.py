@@ -7,7 +7,7 @@ import uvicorn
 from backend.api.app import create_app
 from backend.settings import load_settings
 
-ANNOUNCE_PREFIX = "LESSON_GEN_PORT="
+ANNOUNCE_PREFIX = "STUDY_FORGE_PORT="
 
 
 def main() -> int:

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 export function WindowControls() {
-  const bridge = typeof window === "undefined" ? undefined : window.lessonGen;
+  const bridge = typeof window === "undefined" ? undefined : window.studyForge;
   const [isMaximized, setIsMaximized] = useState(false);
 
   useEffect(() => {

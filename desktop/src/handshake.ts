@@ -1,4 +1,4 @@
-export const ANNOUNCE_PREFIX = "LESSON_GEN_PORT=";
+export const ANNOUNCE_PREFIX = "STUDY_FORGE_PORT=";
 
 type EventListener = (...args: any[]) => void;
 

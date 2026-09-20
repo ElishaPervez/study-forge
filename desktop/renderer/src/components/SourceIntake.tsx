@@ -170,9 +170,9 @@ export const SourceIntake = memo(function SourceIntake({
   };
 
   const handlePick = async () => {
-    if (unavailable || !window.lessonGen) return;
+    if (unavailable || !window.studyForge) return;
     try {
-      const paths = await window.lessonGen.pickSourceFiles();
+      const paths = await window.studyForge.pickSourceFiles();
       if (paths.length > 0) acceptPaths(paths);
     } catch (pickError: unknown) {
       setLocalInputError(pickError instanceof Error ? pickError.message : "The source picker could not open.");
@@ -183,8 +183,8 @@ export const SourceIntake = memo(function SourceIntake({
     event.preventDefault();
     // Dragging in-app content (a page render, an uploaded image) onto this card
     // is not a source file drop: the payload carries no path.
-    if (inAppDragInProgress() || unavailable || !window.lessonGen) return;
-    const paths = Array.from(event.dataTransfer.files).map((file) => window.lessonGen?.pathForFile(file) ?? "");
+    if (inAppDragInProgress() || unavailable || !window.studyForge) return;
+    const paths = Array.from(event.dataTransfer.files).map((file) => window.studyForge?.pathForFile(file) ?? "");
     acceptPaths(paths.filter((path) => path.length > 0));
   };
 
