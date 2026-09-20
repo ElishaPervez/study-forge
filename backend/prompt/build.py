@@ -3,8 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from html.parser import HTMLParser
 
-OUTPUT_POLICY = """\
-Hard requirements:
+# Raw strings: the LaTeX delimiters and command names below must reach the model
+# exactly as written, and "\f"/"\t" are escape sequences in a normal string.
+OUTPUT_POLICY = r"""Hard requirements:
 - Return the raw HTML document only. No markdown fences, no commentary.
 - Return a complete student study guide, not a diagram gallery or a prose dump.
 - Follow the study-guide architecture: orientation, conceptual spine, numbered sections,
@@ -13,6 +14,14 @@ Hard requirements:
   a coherent learning journey rather than unrelated cards.
 - Read the `study-guide.md` reference before writing. Use the matching diagram reference
   for every substantial visual and `animation.md` when a sequence interaction is used.
+- Write every equation as LaTeX: inline math between `\(` and `\)`, display math between
+  `\[` and `\]`. The build step converts those delimiters into native MathML, so never
+  hand-write MathML, never use `$` or `$$`, and never leave a formula as bare LaTeX or
+  plain ASCII like `c = Q / (m T)`.
+- Keep display math in its own block element, and stay inside the supported LaTeX subset:
+  `\frac`, `\dfrac`, `\sqrt`, `^`, `_`, `\Delta`, `\times`, `\cdot`, `\pm`, `\rightarrow`,
+  `\mathrm{...}`, `\text{...}`, and `\,` for spacing. siunitx (`\SI`), mhchem (`\ce`), and
+  `\textdegree` render as literal text, so write units as `\mathrm{J\,kg^{-1}\,K^{-1}}`.
 - The guide may use one or more inline `<script data-guide-controls>` blocks for bounded,
   deterministic offline interactions. JavaScript is optional per component, but when used
   it must have a complete static/no-JS fallback and must obey the safe interaction contract.
@@ -119,8 +128,7 @@ def _source_description(
         return f"{item_count} original image(s), ordered as supplied"
     raise ValueError("image sources require an images selection")
 
-INSTRUCTION = """\
-Subject: {label}
+INSTRUCTION = r"""Subject: {label}
 Attached: {count} page image(s) of the source material, in order.
 Page count: {count} pages.
 
@@ -131,6 +139,9 @@ Hard requirements:
 - Return the raw HTML document only. No markdown fences, no commentary.
 - Build a coherent learning journey: orientation, conceptual spine, numbered sections,
   meaningful visuals, exam/application guidance, retrieval practice, and closing recall.
+- Write every equation as LaTeX between `\(` and `\)` (inline) or `\[` and `\]` (display,
+  in its own block element). The build step converts them to native MathML, so never
+  hand-write MathML, never use `$` or `$$`, and never leave a formula as plain ASCII.
 - Read `study-guide.md` before writing and read relevant diagram references before drawing.
 - Bounded inline `<script data-guide-controls>` interactions are allowed only when they improve
   understanding. Every interaction needs a complete static/no-JS fallback, local deterministic

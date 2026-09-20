@@ -27,6 +27,42 @@ Do not force irrelevant sections. A short source can use a compact version; a te
 - Keep dense material scannable with short paragraphs, strong labels, tables, equations, and deliberate whitespace.
 - Put a student-facing explanation immediately beside or below every complex visual.
 
+## Math and equations
+
+Write every equation, formula, and symbol expression as LaTeX and let the build step render
+it into native MathML. The artifact ships no math library, no math web font, and no network
+request, so the delimiters are the whole interface:
+
+- **Inline math**: `\( ... \)` inside the sentence, e.g. "the specific heat \(c\) of water is
+  \(4190\ \mathrm{J\,kg^{-1}\,K^{-1}}\)".
+- **Display math**: `\[ ... \]` on its own line, inside its own block element (an equation
+  card, a callout, or a table cell) so the layout can style it.
+- `$ ... $` and `$$ ... $$` are also rendered, but prefer the backslash delimiters and never
+  use a dollar sign as a delimiter in text that talks about money.
+
+Never hand-write MathML, and never leave math as bare LaTeX or plain ASCII. `c = Q / (m T)`,
+`c = Q \div (m x T)`, and an unwrapped `\frac{Q}{mT}` are all wrong; `\[c = \dfrac{Q}{m\,\Delta T}\]`
+is right.
+
+Delimiters are read only in HTML text. They are ignored inside `<script>`, `<style>`, `<svg>`,
+`<code>`, and attributes, so an SVG label stays plain text or a unicode symbol.
+
+Supported LaTeX: fractions (`\frac`, `\dfrac`, `\tfrac`), roots (`\sqrt`, `\sqrt[3]`), scripts
+(`^`, `_`), Greek (`\Delta`, `\rho`, `\lambda`, `\mu`, `\Omega`, `\theta`, …), operators
+(`\times`, `\cdot`, `\pm`, `\approx`, `\propto`, `\rightarrow`, `\to`, `\le`, `\ge`), big
+operators (`\sum`, `\int`), accents (`\vec`, `\hat`, `\bar`, `\overline`), aligned and matrix
+environments (`\begin{align}`, `\begin{matrix}`, `\begin{pmatrix}`, `\begin{cases}`),
+`\text{...}`, `\mathrm{...}`, `\left( ... \right)`, and spacing (`\,`, `\ `, `\quad`).
+
+Unavailable — these render as their literal command text, so do not use them: siunitx (`\SI`,
+`\pu`), mhchem (`\ce`), and `\textdegree`. Write units as
+`4190\ \mathrm{J\,kg^{-1}\,K^{-1}}` or `4190\ \text{J kg}^{-1}`, a temperature as
+`30^\circ\text{C}`, and a reaction as `2H_2 + O_2 \rightarrow 2H_2O`.
+
+Also supported: `\mathbf`, `\mathbb`, `\mathcal`, `\boldsymbol`, `\operatorname{...}`,
+`\binom`, `\partial`, `\nabla`, `\infty`, and the `\begin{equation}`, `\begin{gather}`, and
+`\begin{aligned}` environments.
+
 ## Offline interaction contract
 
 The artifact may contain one or more inline `<script data-guide-controls>` blocks. All behavior must remain inside the HTML file. No fetch, XMLHttpRequest, WebSocket, import, external script, iframe, or remote asset is allowed.

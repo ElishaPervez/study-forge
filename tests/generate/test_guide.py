@@ -205,6 +205,17 @@ def test_revision_without_content_is_retried_with_an_explanation(tmp_path: Path)
     assert "no content" in llm.seen[1][-1]["content"].lower()
 
 
+def test_revision_renders_latex_into_mathml(tmp_path: Path) -> None:
+    revised = GOOD.replace("</body>", "<p>So \\(v = f\\lambda\\).</p></body>", 1)
+    llm = ScriptedLLM([LLMReply(text=revised)])
+
+    result = _revise(tmp_path, llm)
+
+    assert result.html is not None
+    assert "<math" in result.html
+    assert "\\(" not in result.html
+
+
 def test_revision_truncation_is_named_in_the_repair_prompt(tmp_path: Path) -> None:
     truncated = GOOD[: GOOD.index("</body>")]
     llm = ScriptedLLM([
