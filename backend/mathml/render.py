@@ -58,6 +58,20 @@ _ENTITY_RE = re.compile(r"&#[0-9]+;|&#[xX][0-9A-Fa-f]+;")
 # an unmistakable LaTeX signal. "\(", "\[", and "$$" are never ambiguous.
 _DOLLAR_SIGNAL_RE = re.compile(r"[\\^_={}]")
 
+# latex2mathml 3.81.1 maps \circ to U+2218 RING OPERATOR, which the MathML operator
+# dictionary classifies as infix, so a browser pads it and "25^\circ\text{C}" typeset as
+# "25 ° C". A superscript \circ always means degrees here, so it becomes the tight, upright
+# U+00B0 instead; a bare \circ (function composition) keeps its ring operator.
+_DEGREE_RE = re.compile(r"\^\s*\{?\s*\\circ(?![A-Za-z])\s*\}?")
+_DEGREE_LATEX = "^\\text{\u00b0}"
+
+# latex2mathml also drops mathvariant="normal" when \mathrm{} wraps a single character, so
+# \mathrm{J} came out italic while \mathrm{kg} stayed upright and one sentence mixed both.
+# The empty group forces the multi-character path, and the empty <mrow/> it leaves behind
+# is stripped after conversion.
+_SINGLE_CHAR_MATHRM_RE = re.compile(r"\\mathrm\s*\{\s*([^{}\s\\])\s*\}")
+_EMPTY_MROW_RE = re.compile(r"<mrow\s*/>")
+
 
 def _escape_raw_markup(mathml: str) -> str:
     """Escape the "<" and "&" that the converter left as text instead of markup."""
@@ -87,6 +101,20 @@ def _escape_raw_markup(mathml: str) -> str:
     return "".join(pieces)
 
 
+def _work_around_converter_quirks(latex: str) -> str:
+    r"""Repair the latex2mathml defects that mis-render guide math.
+
+    Both fixes are applied to the LaTeX rather than to the MathML, because that is the only
+    point where the intent behind a glyph is still known: a superscript \circ is a degree,
+    while a bare \circ is an operator. Replacement functions are used because re.sub treats
+    backslash escapes in a template as escapes, which would eat a \text command's prefix.
+    """
+    degrees = _DEGREE_RE.sub(lambda _match: _DEGREE_LATEX, latex)
+    return _SINGLE_CHAR_MATHRM_RE.sub(
+        lambda match: "\\mathrm{" + match.group(1) + "{}}", degrees
+    )
+
+
 def to_mathml(latex: str, *, display: bool = False) -> str | None:
     """Convert one LaTeX expression, or None when it cannot be rendered safely.
 
@@ -98,11 +126,12 @@ def to_mathml(latex: str, *, display: bool = False) -> str | None:
         return None
     try:
         converted = latex2mathml.converter.convert(
-            expression, display="block" if display else "inline"
+            _work_around_converter_quirks(expression),
+            display="block" if display else "inline",
         )
     except Exception:  # noqa: BLE001 - a conversion failure must never break a guide
         return None
-    repaired = _escape_raw_markup(converted)
+    repaired = _EMPTY_MROW_RE.sub("", _escape_raw_markup(converted))
     try:
         xml.etree.ElementTree.fromstring(repaired)
     except xml.etree.ElementTree.ParseError:

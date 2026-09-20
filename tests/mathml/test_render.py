@@ -177,3 +177,31 @@ def test_text_copied_out_of_latex_is_escaped() -> None:
 
 def test_escaping_helper_escapes_only_raw_markup() -> None:
     assert _escape_raw_markup("<mtext>a<b & c>d</mtext>") == "<mtext>a&lt;b &amp; c>d</mtext>"
+
+
+@pytest.mark.parametrize("latex", [r"25^\circ\text{C}", r"25^{\circ}\text{C}"])
+def test_a_superscript_degree_is_tight_instead_of_an_infix_ring_operator(latex: str) -> None:
+    # U+2218 (what \circ maps to) is an infix operator, so the browser pads it and the guide
+    # typeset "25 ° C". A degree sign is U+00B0 and carries no padding.
+    rendered = render_math(rf"<p>\({latex}\)</p>")
+
+    assert "&#x02218;" not in rendered
+    assert "\u00b0" in rendered
+
+
+def test_function_composition_keeps_its_ring_operator() -> None:
+    # Only a superscript \circ means degrees; a bare one is still an operator.
+    rendered = render_math(r"<p>\(f \circ g\)</p>")
+
+    assert "&#x02218;" in rendered
+
+
+@pytest.mark.parametrize("latex", [r"\mathrm{J}", r"\mathrm{kg}", r"\mathrm{\Delta}"])
+def test_units_are_upright_whatever_their_length(latex: str) -> None:
+    # latex2mathml drops mathvariant="normal" when \mathrm{} wraps one character, which is
+    # why "33750 J" was italic while "33.75 kJ" was upright in the same sentence.
+    converted = to_mathml(latex)
+
+    assert converted is not None
+    assert 'mathvariant="normal"' in converted
+    assert "<mrow />" not in converted
