@@ -95,7 +95,7 @@ describe("source intake", () => {
     expect(markup).toMatch(/class="source-remove-action"[^>]*disabled=""/);
     expect(markup).toContain('disabled="" aria-label="Move first.png up"');
     expect(markup).toContain(">Choose different source</button>");
-    expect(markup).toContain('type="file" multiple=""');
+    expect(markup).not.toContain('type="file"');
   });
 
   it("renders image controls without PDF page controls", () => {
@@ -132,8 +132,7 @@ describe("source intake", () => {
 
     expect(buttons.length).toBeGreaterThan(0);
     expect(buttons.every((button) => button.includes('disabled=""'))).toBe(true);
-    expect(markup).toContain('type="file"');
-    expect(markup).toContain('type="file" multiple="" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif" disabled=""');
+    expect(markup).toContain(">Registering source...</button>");
   });
 
   it("shows a newer local error instead of a stale parent error", () => {

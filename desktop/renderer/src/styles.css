@@ -496,30 +496,6 @@ h3 {
   color: var(--disabled);
 }
 
-.source-file-input-label {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 8px 12px;
-  border: 1.5px dashed var(--dash);
-  border-radius: 6px;
-  color: var(--muted);
-  font-size: 0.64rem;
-}
-
-.source-file-input-label input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.source-file-input-label:focus-within {
-  border-color: var(--accent-line);
-  color: var(--accent);
-}
-
 .source-inline-error {
   padding: 8px 10px;
   border-left: 3px solid var(--failure);

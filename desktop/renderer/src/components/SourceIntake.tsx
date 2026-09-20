@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { memo, useEffect, useRef, useState, type DragEvent } from "react";
 
 import type { SourceKind, SourceView } from "../api";
 import { inAppDragInProgress } from "../inAppDrag";
@@ -195,12 +195,6 @@ export const SourceIntake = memo(function SourceIntake({
     }
   };
 
-  const handleInputChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const paths = Array.from(event.target.files ?? []).map((file) => window.lessonGen?.pathForFile(file) ?? "");
-    acceptPaths(paths.filter((path) => path.length > 0));
-    event.target.value = "";
-  };
-
   const handleRemove = () => {
     if (unavailable) return;
     beginSourceRemoval(() => setInputError(null), onRemove);
@@ -258,16 +252,6 @@ export const SourceIntake = memo(function SourceIntake({
         <button type="button" className="secondary-button source-button" onClick={() => void handlePick()} disabled={unavailable}>
           {busy ? "Registering source..." : source ? "Choose different source" : "Choose source"}
         </button>
-        <label className="source-file-input-label">
-          <span>Browse files</span>
-          <input
-            type="file"
-            multiple
-            accept=".pdf,.png,.jpg,.jpeg,.webp,.gif"
-            onChange={handleInputChange}
-            disabled={unavailable}
-          />
-        </label>
       </div>
 
       {displayedError ? <p className="source-inline-error" role="alert">{displayedError}</p> : null}
