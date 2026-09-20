@@ -1705,10 +1705,7 @@ h3 {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  justify-content: center;
-  min-height: 300px;
   max-width: 34rem;
-  padding: 44px 0 30px;
 }
 
 .viewer-empty h3 {
