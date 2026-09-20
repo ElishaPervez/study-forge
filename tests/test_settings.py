@@ -15,8 +15,8 @@ def test_load_settings_reads_key_and_pins_model(tmp_path: Path) -> None:
     settings = load_settings(env_file=env)
 
     assert settings.openrouter_api_key == "sk-test-123"
-    assert settings.model == "meta/muse-spark-1.3-contributor"
-    assert settings.reasoning_effort == "xhigh"
+    assert settings.model == "deepseek/deepseek-v4.1-flash"
+    assert settings.reasoning_effort == "high"
     assert settings.max_output_tokens == 200000
 
 
@@ -25,15 +25,15 @@ def test_load_settings_ignores_model_and_parameter_overrides(tmp_path: Path) -> 
     env.write_text(
         "OPENROUTER_API_KEY=sk-test-123\n"
         "MODEL=~deepseek/deepseek-flash-latest\n"
-        "REASONING_EFFORT=high\n"
+        "REASONING_EFFORT=low\n"
         "MAX_OUTPUT_TOKENS=1\n",
         encoding="utf-8",
     )
 
     settings = load_settings(env_file=env)
 
-    assert settings.model == "meta/muse-spark-1.3-contributor"
-    assert settings.reasoning_effort == "xhigh"
+    assert settings.model == "deepseek/deepseek-v4.1-flash"
+    assert settings.reasoning_effort == "high"
     assert settings.max_output_tokens == 200000
 
 

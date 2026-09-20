@@ -12,8 +12,8 @@ from backend.llm.client import LLMError, OpenRouterLLM, image_part
 def _client(handler, *, provider_only=None) -> OpenRouterLLM:
     return OpenRouterLLM(
         api_key="sk-test",
-        model="meta/muse-spark-1.3-contributor",
-        reasoning_effort="xhigh",
+        model="deepseek/deepseek-v4.1-flash",
+        reasoning_effort="high",
         max_output_tokens=200000,
         provider_only=provider_only,
         transport=httpx.MockTransport(handler),
@@ -35,11 +35,11 @@ def test_request_pins_model_params_and_carries_no_remote_url() -> None:
 
     reply = _client(handler).complete([{"role": "user", "content": "hi"}])
 
-    assert captured["model"] == "meta/muse-spark-1.3-contributor"
+    assert captured["model"] == "deepseek/deepseek-v4.1-flash"
     assert captured["max_tokens"] == 200000
-    assert captured["reasoning_effort"] == "xhigh"
+    assert captured["reasoning_effort"] == "high"
     assert captured["provider"] == {
-        "only": ["meta"],
+        "only": ["deepseek"],
         "allow_fallbacks": False,
     }
     assert captured["messages"] == [{"role": "user", "content": "hi"}]
@@ -61,7 +61,7 @@ def test_provider_follows_the_model_namespace() -> None:
 
     _client(handler).complete([{"role": "user", "content": "hi"}])
 
-    assert captured["provider"] == {"only": ["meta"], "allow_fallbacks": False}
+    assert captured["provider"] == {"only": ["deepseek"], "allow_fallbacks": False}
 
 
 def test_provider_can_be_pinned_explicitly() -> None:
@@ -73,11 +73,11 @@ def test_provider_can_be_pinned_explicitly() -> None:
             200, json={"choices": [{"message": {"content": "<html></html>"}}]}
         )
 
-    _client(handler, provider_only=["meta"]).complete(
+    _client(handler, provider_only=["deepseek"]).complete(
         [{"role": "user", "content": "hi"}]
     )
 
-    assert captured["provider"] == {"only": ["meta"], "allow_fallbacks": False}
+    assert captured["provider"] == {"only": ["deepseek"], "allow_fallbacks": False}
 
 
 def test_reasoning_starved_completion_is_surfaced_for_diagnostics() -> None:

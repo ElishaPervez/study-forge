@@ -85,7 +85,7 @@ tests/              backend pytest suite, mirrored by module
 **Settings** (`backend/settings.py`) are split: `.env` supplies `OPENROUTER_API_KEY` (required;
 its absence exits with code 2) plus optional `SKILL_DIR` (default `diagram-design`) and
 `JOBS_DIR` (default `jobs`). The model, reasoning effort, and output cap are code constants,
-not env-overridable: `meta/muse-spark-1.3-contributor`, effort `xhigh`, `max_tokens` 200000.
+not env-overridable: `deepseek/deepseek-v4.1-flash`, effort `high`, `max_tokens` 200000.
 The OpenRouter provider is pinned to the model's namespace prefix with `allow_fallbacks: false`.
 
 **Ingest** (`backend/ingest/`) stores sources under `jobs/sources/<64-hex>/`, addressed by the
