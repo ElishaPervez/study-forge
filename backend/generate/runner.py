@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pymupdf
 
+from backend.diagnostics.trace import record, span
 from backend.generate.guide import GuideRequest, generate_guide
 from backend.generate.revision import RevisionRequest, revise_guide
 from backend.generate.unit import MAX_CALLS, STOPPED_FINDING, UnitStatus
@@ -69,9 +70,12 @@ class GuideRunner:
     max_calls: int = MAX_CALLS
 
     def __call__(self, request: OperationRecord, context: OperationContext) -> RunOutcome:
+        record("run.started", kind=request.kind, guide_id=request.guide_id)
         try:
-            guide = load_guide(self.jobs_dir, request.guide_id)
+            with span("run.load_guide"):
+                guide = load_guide(self.jobs_dir, request.guide_id)
         except (OSError, TypeError, ValueError) as error:
+            record("run.failed", stage="load_guide", error=str(error))
             return RunOutcome(False, f"the guide is no longer available: {error}")
         if request.kind in {"create", "retry"}:
             return self.run_generation(guide, request, context)
@@ -98,19 +102,30 @@ class GuideRunner:
             current = update_guide(self.jobs_dir, current, status=status.value)
 
         try:
-            source = self.load_source(current.source_id)
-            result = generate_guide(
-                GuideRequest(current.guide_id, source, current.selection),
-                source_root=self.jobs_dir,
-                llm=self.llm(),
-                bundle=self.bundle,
-                fonts_css=self.fonts_css,
-                out_dir=guide_dir_for(self.jobs_dir, current.guide_id),
-                max_calls=self.max_calls,
-                status_callback=save_status,
-                progress=context.progress,
-                stop=context.stop,
-            )
+            with span("run.load_source", source_id=current.source_id) as source_span:
+                source = self.load_source(current.source_id)
+                source_span["kind"] = source.kind
+                source_span["bytes"] = source.total_bytes
+            with span(
+                "run.generate_guide",
+                guide_id=current.guide_id,
+                images=source.image_count or source.page_count,
+                selection=current.selection.get("mode"),
+            ) as generation:
+                result = generate_guide(
+                    GuideRequest(current.guide_id, source, current.selection),
+                    source_root=self.jobs_dir,
+                    llm=self.llm(),
+                    bundle=self.bundle,
+                    fonts_css=self.fonts_css,
+                    out_dir=guide_dir_for(self.jobs_dir, current.guide_id),
+                    max_calls=self.max_calls,
+                    status_callback=save_status,
+                    progress=context.progress,
+                    stop=context.stop,
+                )
+                generation["status"] = result.status.value
+                generation["calls"] = result.calls
         except Exception as error:  # noqa: BLE001 - any failure becomes a retryable guide
             return self._record_generation_failure(current, error)
 
@@ -135,6 +150,7 @@ class GuideRunner:
         findings: list[str] | None = None,
     ) -> RunOutcome:
         if error is not None:
+            record("run.failed", stage="generation", error=error_diagnostic(error))
             diagnostic = error_diagnostic(error)
             message = (
                 SOURCE_RECOVERY_MESSAGE if is_source_read_failure(error) else diagnostic
@@ -145,6 +161,7 @@ class GuideRunner:
             findings = list(findings or [])
             status = status or UnitStatus.FAILED.value
             message = "; ".join(findings) or UNVERIFIED_RESULT_MESSAGE
+            record("run.failed", stage="verification", status=status, findings=len(findings) or None)
         # The guide keeps the name the user gave it: a failed request replaces nothing.
         update_guide(
             self.jobs_dir,
@@ -164,8 +181,12 @@ class GuideRunner:
         context: OperationContext,
     ) -> RunOutcome:
         try:
-            current_html = read_completed_html(self.jobs_dir, guide)
-            source = self.load_source(guide.source_id)
+            with span("run.read_current") as current_span:
+                current_html = read_completed_html(self.jobs_dir, guide)
+                current_span["chars"] = len(current_html)
+            with span("run.load_source", source_id=guide.source_id) as source_span:
+                source = self.load_source(guide.source_id)
+                source_span["kind"] = source.kind
         except Exception as error:  # noqa: BLE001 - the guide keeps its old version
             diagnostic = error_diagnostic(error)
             message = (
@@ -173,24 +194,27 @@ class GuideRunner:
             )
             return RunOutcome(False, message)
 
-        result = revise_guide(
-            RevisionRequest(
-                guide.guide_id,
-                source,
-                guide.selection,
-                request.selected_text or "",
-                request.instruction or "",
-                request.revision_mode or "custom",
-                current_html,
-            ),
-            source_root=self.jobs_dir,
-            llm=self.llm(),
-            bundle=self.bundle,
-            fonts_css=self.fonts_css,
-            max_calls=self.max_calls,
-            progress=context.progress,
-            stop=context.stop,
-        )
+        with span("run.revise_guide", mode=request.revision_mode) as revision:
+            result = revise_guide(
+                RevisionRequest(
+                    guide.guide_id,
+                    source,
+                    guide.selection,
+                    request.selected_text or "",
+                    request.instruction or "",
+                    request.revision_mode or "custom",
+                    current_html,
+                ),
+                source_root=self.jobs_dir,
+                llm=self.llm(),
+                bundle=self.bundle,
+                fonts_css=self.fonts_css,
+                max_calls=self.max_calls,
+                progress=context.progress,
+                stop=context.stop,
+            )
+            revision["calls"] = result.calls
+            revision["produced"] = result.html is not None
         if result.html is None:
             message = "; ".join(result.findings) or UNVERIFIED_RESULT_MESSAGE
             return RunOutcome(False, message)
@@ -222,14 +246,16 @@ class GuideRunner:
             revisions = guide.revision_count
             if request.kind in {"clarify", "update"}:
                 revisions = request.intended_revision + 1
-            publish_completed_guide(
-                self.jobs_dir,
-                guide,
-                html=html,
-                receipt=request.receipt,
-                revision_count=revisions,
-                name=name,
-            )
+            with span("run.publish", bytes=len(html), guide_name=name):
+                publish_completed_guide(
+                    self.jobs_dir,
+                    guide,
+                    html=html,
+                    receipt=request.receipt,
+                    revision_count=revisions,
+                    name=name,
+                )
+            record("run.published", bytes=len(html), guide_name=name)
         return RunOutcome(True)
 
     def _record_stop(self, guide: GuideRecord) -> None:

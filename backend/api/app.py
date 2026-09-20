@@ -11,15 +11,17 @@ import json
 import re
 import shutil
 import threading
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from backend.diagnostics.trace import logs_dir_for, record_api_call, trace_for
 from backend.fonts.embed import default_fonts_css
 from backend.generate.runner import (
     SOURCE_RECOVERY_MESSAGE,
@@ -120,6 +122,24 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
             queue.stop()
 
     app = FastAPI(title="Study Forge", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def _timed_request(request: Request, call_next):
+        """Every HTTP reply is timed, so the click-to-accepted path is measurable."""
+        started = time.perf_counter()
+        response = await call_next(request)
+        record_api_call(
+            logs_dir_for(settings.jobs_dir),
+            method=request.method,
+            path=request.url.path,
+            status=response.status_code,
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+            # The queue panel polls while work runs; the flag keeps it out of the
+            # way of the requests a person actually caused.
+            poll=request.url.path == "/api/queue",
+        )
+        return response
+
     bundle = load_bundle(settings.skill_dir)
     fonts_css = default_fonts_css()
     app.state.settings = settings
@@ -252,6 +272,17 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
             view["operation"] = row
         return view
 
+    def _record_acceptance(
+        started: float, operation: OperationRecord, **fields: object
+    ) -> None:
+        """Note in the request's own trace when the service accepted it."""
+        trace_for(settings.jobs_dir, operation.receipt).event(
+            "api.accepted",
+            elapsed_ms=round((time.perf_counter() - started) * 1000.0, 1),
+            guide_id=operation.guide_id,
+            **fields,
+        )
+
     def _operation_row(receipt: str) -> dict:
         row = queue.row(_request_receipt(receipt))
         if row is None:
@@ -361,6 +392,7 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
 
     @app.post("/api/guides", status_code=202)
     def create_guide(body: CreateGuideBody) -> dict:
+        started = time.perf_counter()
         guide_id = _request_receipt(body.receipt)
 
         def prepare() -> None:
@@ -384,6 +416,14 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
                 prepare=prepare,
             )
         )
+        _record_acceptance(
+            started,
+            operation,
+            endpoint="POST /api/guides",
+            kind="create",
+            source_id=body.source_id,
+            selection=body.selection,
+        )
 
         return _accepted_view(_guide_or_404(guide_id), operation)
 
@@ -400,6 +440,7 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
 
     @app.post("/api/guides/{guide_id}/generate", status_code=202)
     def generate(guide_id: str, body: OperationBody) -> dict:
+        started = time.perf_counter()
         receipt = _request_receipt(body.receipt)
         guide = _guide_or_404(guide_id)
         if guide.status == UnitStatus.OK.value and _artifact_path(guide) is not None:
@@ -409,10 +450,14 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
         operation = _submit(
             QueueRequest(guide_id=guide.guide_id, kind="create", receipt=receipt)
         )
+        _record_acceptance(
+            started, operation, endpoint="POST /api/guides/{guide}/generate", kind="create"
+        )
         return _accepted_view(guide, operation)
 
     @app.post("/api/guides/{guide_id}/retry", status_code=202)
     def retry(guide_id: str, body: OperationBody) -> dict:
+        started = time.perf_counter()
         receipt = _request_receipt(body.receipt)
         guide = _guide_or_404(guide_id)
         if guide.status not in {UnitStatus.FAILED.value, UnitStatus.NEEDS_ATTENTION.value}:
@@ -420,10 +465,14 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
         operation = _submit(
             QueueRequest(guide_id=guide.guide_id, kind="retry", receipt=receipt)
         )
+        _record_acceptance(
+            started, operation, endpoint="POST /api/guides/{guide}/retry", kind="retry"
+        )
         return _accepted_view(guide, operation)
 
     @app.post("/api/guides/{guide_id}/revisions", status_code=202)
     def revise(guide_id: str, body: RevisionBody) -> dict:
+        started = time.perf_counter()
         receipt = _request_receipt(body.receipt)
         if not body.selected_text.strip():
             raise HTTPException(status_code=400, detail="selected text is required")
@@ -446,6 +495,15 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
                 intended_revision=guide.revision_count,
                 base_fingerprint=base_fingerprint,
             )
+        )
+        _record_acceptance(
+            started,
+            operation,
+            endpoint="POST /api/guides/{guide}/revisions",
+            kind="clarify" if body.mode == "clarify" else "update",
+            mode=body.mode,
+            selected_chars=len(body.selected_text),
+            instruction_chars=len(body.instruction),
         )
         return _accepted_view(guide, operation)
 
@@ -509,12 +567,20 @@ def create_app(settings: Settings, llm: LLM | None = None) -> FastAPI:
 
     @app.post("/api/operations/{receipt}/retry", status_code=202)
     def retry_operation(receipt: str, body: OperationBody) -> dict:
+        started = time.perf_counter()
         original = _operation_row(receipt)
         new_receipt = _request_receipt(body.receipt)
         try:
             operation = queue.retry_request(original["receipt"], new_receipt=new_receipt)
         except QueueError as error:
             raise HTTPException(status_code=error.status_code, detail=str(error)) from None
+        _record_acceptance(
+            started,
+            operation,
+            endpoint="POST /api/operations/{receipt}/retry",
+            kind=operation.kind,
+            retried_receipt=receipt,
+        )
         return _accepted_view(_guide_or_404(operation.guide_id), operation)
 
     @app.post("/api/shutdown/prepare")

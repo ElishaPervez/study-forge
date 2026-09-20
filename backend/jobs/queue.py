@@ -8,6 +8,7 @@ so a change can never slip past a busy guide and run later by surprise.
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from backend.diagnostics.trace import trace_for, use_trace
 from backend.generate.progress import (
     ACTIVITY_WAITING,
     ProgressReporter,
@@ -123,6 +125,9 @@ class GuideQueue:
         self._operations: dict[str, OperationRecord] = {}
         self._pending: list[str] = []
         self._live: dict[str, OperationContext] = {}
+        # When each request was accepted, so queue wait can be measured in the
+        # trace instead of inferred from two wall-clock timestamps.
+        self._accepted_at: dict[str, float] = {}
         self._busy: set[str] = set()
         self._guide_names: dict[str, str] = {}
         self._session_completions: set[str] = set()
@@ -245,9 +250,20 @@ class GuideQueue:
             self._pending.append(operation.receipt)
             self._busy.add(operation.guide_id)
             self._live[operation.receipt] = self._new_context(operation)
+            self._accepted_at[operation.receipt] = time.monotonic()
             self._bump()
             self._condition.notify_all()
-            return operation
+            waiting = len(self._pending)
+            busy = len(self._busy)
+        trace_for(self.jobs_dir, operation.receipt).event(
+            "queue.accepted",
+            kind=operation.kind,
+            guide_id=operation.guide_id,
+            order=operation.order,
+            waiting=waiting,
+            busy=busy,
+        )
+        return operation
 
     def retry_request(self, receipt: str, *, new_receipt: str | None = None) -> OperationRecord:
         with self._condition:
@@ -378,6 +394,7 @@ class GuideQueue:
             self._shutdown = True
             self._accepting = False
             self._advancing = False
+            interrupted_waiting: list[str] = []
             for receipt in list(self._pending):
                 operation = self._operations.get(receipt)
                 if operation is None or operation.state != "waiting":
@@ -385,6 +402,11 @@ class GuideQueue:
                 self._interrupt(operation)
                 self._pending.remove(receipt)
                 self._release_busy(operation)
+                interrupted_waiting.append(receipt)
+            for receipt in interrupted_waiting:
+                trace_for(self.jobs_dir, receipt).event(
+                    "queue.interrupted", state="interrupted", reason="the app closed the queue"
+                )
             for context in self._live.values():
                 context.stop.set()
             self._bump()
@@ -425,17 +447,47 @@ class GuideQueue:
         if context is None:
             context = self._new_context(request)
             self._live[request.receipt] = context
+        with self._condition:
+            accepted_at = self._accepted_at.pop(request.receipt, None)
+        queued_ms = (
+            round((time.monotonic() - accepted_at) * 1000.0, 1)
+            if accepted_at is not None
+            else None
+        )
+        # The worker is the one place every stage runs under, so the trace is made
+        # current here: ingest, model calls, checking, and publication all report
+        # into the same file without any of them knowing about each other.
+        trace = trace_for(self.jobs_dir, request.receipt)
+        trace.event(
+            "queue.run.started",
+            kind=request.kind,
+            guide_id=request.guide_id,
+            order=request.order,
+            queued_ms=queued_ms,
+        )
         context.progress.set_activity(ACTIVITY_WAITING)
-        try:
-            outcome = self._runner(request, context)
-        except Exception as error:  # noqa: BLE001 - the queue must survive any runner failure
-            outcome = RunOutcome(False, str(error) or error.__class__.__name__)
+        with use_trace(trace):
+            try:
+                outcome = self._runner(request, context)
+            except Exception as error:  # noqa: BLE001 - the queue must survive any runner failure
+                outcome = RunOutcome(False, str(error) or error.__class__.__name__)
         if outcome is None:
             outcome = RunOutcome(False, "the request ended without a result")
         with self._condition:
             self._finish(request, outcome)
+            settled = self._operations.get(request.receipt)
             self._bump()
             self._condition.notify_all()
+        state = settled.state if settled is not None else None
+        trace.event("queue.settled", state=state, ok=outcome.ok, error=outcome.error)
+        trace.finish(
+            ok=outcome.ok,
+            state=state,
+            kind=request.kind,
+            guide_id=request.guide_id,
+            queued_ms=queued_ms,
+            error=outcome.error,
+        )
 
     def _finish(self, request: OperationRecord, outcome: RunOutcome) -> None:
         operation = self._operations.get(request.receipt, request)

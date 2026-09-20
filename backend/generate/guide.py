@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
 
+from backend.diagnostics.trace import record, span
 from backend.generate.progress import ACTIVITY_PREPARING, ProgressReporter
 from backend.generate.unit import (
     MAX_CALLS,
@@ -13,6 +14,7 @@ from backend.generate.unit import (
     UnitResult,
     UnitStatus,
     generate_unit,
+    logged_findings,
     stopped_work,
 )
 from backend.ingest.source import source_inputs
@@ -56,7 +58,15 @@ def generate_guide(
 ) -> GuideResult:
     if progress is not None:
         progress.set_activity(ACTIVITY_PREPARING)
-    inputs = source_inputs(request.source, request.selection, source_root)
+    with span(
+        "source.inputs",
+        kind=request.source.kind,
+        mode=request.selection.get("mode"),
+        files=len(request.source.files),
+    ) as source_span:
+        inputs = source_inputs(request.source, request.selection, source_root)
+        source_span["images"] = len(inputs)
+    record("source.ready", images=len(inputs))
     if stopped_work(stop):
         return GuideResult(
             UnitStatus.FAILED, "Untitled guide", 0, [], None, [STOPPED_FINDING]
@@ -81,9 +91,21 @@ def generate_guide(
         progress=progress,
         stop=stop,
     )
+    record(
+        "unit.finished",
+        status=result.status.value,
+        calls=result.calls,
+        refs=",".join(result.requested_refs) or None,
+        findings=len(result.findings) or None,
+        messages=logged_findings(result.findings) or None,
+    )
     name = "Untitled guide"
     if result.artifact_path is not None and result.artifact_path.is_file():
-        name = extract_guide_title(result.artifact_path.read_text(encoding="utf-8"))
+        with span("artifact.title") as title_span:
+            html = result.artifact_path.read_text(encoding="utf-8")
+            name = extract_guide_title(html)
+            title_span["chars"] = len(html)
+            title_span["guide_name"] = name
     return GuideResult(
         result.status,
         name,

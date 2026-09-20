@@ -22,10 +22,12 @@ def test_load_settings_reads_key_and_pins_model(tmp_path: Path) -> None:
 
 def test_load_settings_ignores_model_and_parameter_overrides(tmp_path: Path) -> None:
     env = tmp_path / ".env"
+    # Both overrides differ from the defaults they must not be able to change:
+    # a probe value equal to the default would pass here even if it were honored.
     env.write_text(
         "OPENROUTER_API_KEY=sk-test-123\n"
         "MODEL=~deepseek/deepseek-flash-latest\n"
-        "REASONING_EFFORT=low\n"
+        "REASONING_EFFORT=max\n"
         "MAX_OUTPUT_TOKENS=1\n",
         encoding="utf-8",
     )

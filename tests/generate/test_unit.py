@@ -1,16 +1,25 @@
+import json
 from pathlib import Path
 from threading import Event
 
 import pytest
 
+from backend.diagnostics.trace import Trace, trace_for, use_trace
 from backend.fonts.embed import inject_fonts
 from backend.generate.progress import ProgressReporter, count_document_lines
 from backend.generate.unit import (
+    FINDING_LOG_LIMIT,
+    FINDING_LOG_MAX,
     MAX_CALLS,
+    MAX_PATCHES,
     MAX_TOOL_TURNS,
+    PATCH_TOOL,
     UnitRequest,
     UnitStatus,
+    _apply_edits,
+    _patched_document,
     generate_unit,
+    logged_findings,
 )
 from backend.ingest.pdf import PageImage
 from backend.llm.client import LLMError, LLMReply, ToolCall
@@ -27,14 +36,16 @@ BROKEN = '<html><body><svg viewBox="0 0 100 100"></svg></body></html>'
 
 
 class ScriptedLLM:
-    """Replays a fixed script and records the messages it was shown."""
+    """Replays a fixed script and records the messages and tools it was shown."""
 
     def __init__(self, replies: list[LLMReply]) -> None:
         self._replies = list(replies)
         self.seen: list[list[dict]] = []
+        self.tools: list[list[dict] | None] = []
 
     def complete(self, messages, tools=None, *, on_text=None, stop=None) -> LLMReply:
         self.seen.append(list(messages))
+        self.tools.append(list(tools) if tools else None)
         reply = self._replies.pop(0)
         if on_text is not None:
             on_text(reply.text)
@@ -802,3 +813,274 @@ def test_reference_lookups_do_not_consume_the_generation_attempts(tmp_path: Path
     assert result.status is UnitStatus.OK
     assert result.calls == 5
     assert len(result.requested_refs) == 4
+
+
+DRAFT = '<html><head><title>Unit 12 Waves</title></head><body><p>Waves</p></body></html>'
+
+
+def _patch_call(find: str, replace: str) -> ToolCall:
+    return ToolCall(
+        "call_patch", PATCH_TOOL, json.dumps({"edits": [{"find": find, "replace": replace}]})
+    )
+
+
+def _verdicts(*results: CheckResult):
+    """A checker that returns each verdict in turn."""
+    remaining = list(results)
+    return lambda path, skill_dir: remaining.pop(0)
+
+
+def test_apply_edits_requires_each_find_to_match_exactly_once() -> None:
+    twice = "<p>one</p><p>one</p>"
+    ambiguous, note = _apply_edits(
+        twice, {"edits": [{"find": "<p>one</p>", "replace": "<p>two</p>"}]}
+    )
+    assert ambiguous is None
+    assert "matched 2 times" in note
+
+    missing, note = _apply_edits(
+        twice, {"edits": [{"find": "<p>absent</p>", "replace": "x"}]}
+    )
+    assert missing is None
+    assert "matched no text" in note
+
+    assert _apply_edits(twice, {"edits": []})[0] is None
+    assert _apply_edits(twice, {"edits": ["not an object"]})[0] is None
+    assert _apply_edits(twice, "nonsense")[0] is None
+
+
+def test_edits_apply_in_order_so_one_can_build_on_another() -> None:
+    patched, note = _apply_edits(
+        "<p>a</p>",
+        {
+            "edits": [
+                {"find": "<p>a</p>", "replace": "<p>b</p>"},
+                {"find": "<p>b</p>", "replace": "<p>c</p>"},
+            ]
+        },
+    )
+
+    assert patched == "<p>c</p>"
+    assert "2 edit" in note
+
+
+def test_a_patch_is_refused_without_a_document_or_once_the_budget_is_spent() -> None:
+    call = _patch_call("a", "b")
+
+    patched, note = _patched_document([call], None, 0)
+    assert patched is None
+    assert "no document to patch" in note
+
+    patched, note = _patched_document([call], "a", MAX_PATCHES)
+    assert patched is None
+    assert "patch limit" in note
+
+    patched, _ = _patched_document([call], "a", MAX_PATCHES - 1)
+    assert patched == "b"
+
+    # A turn that made no patch request is not a refusal, just nothing to do.
+    assert _patched_document([], "a", 0) == (None, "")
+
+
+def test_a_patch_repairs_the_document_without_rewriting_it(tmp_path: Path) -> None:
+    patch = _patch_call("<p>Waves</p>", "<p>Waves and energy</p>")
+    llm = ScriptedLLM([LLMReply(text=DRAFT), LLMReply(text="", tool_calls=[patch])])
+
+    result = generate_unit(
+        _request(tmp_path),
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        out_dir=tmp_path / "out",
+        checker=_verdicts(
+            CheckResult(False, ["figure 1 has no accessible name"]), CheckResult(True, [])
+        ),
+    )
+
+    assert result.status is UnitStatus.OK
+    # One repair call carrying an edit, not one carrying the whole document again.
+    assert result.calls == 2
+    written = result.artifact_path.read_text(encoding="utf-8")
+    assert "Waves and energy" in written
+    assert "<p>Waves</p>" not in written
+
+
+def test_a_forbidden_script_call_is_patched_out_under_the_real_gates(tmp_path: Path) -> None:
+    # The shape production actually failed on: the output policy and the shipped
+    # checker both reject a Function constructor, and both are real here.
+    offending = "<script data-guide-controls>const f = new Function('x', 'y');</script>"
+    candidate = GOOD.replace("</body>", f"{offending}</body>", 1)
+    assert candidate != GOOD
+    replacement = "<script data-guide-controls>function f(x, y) { return x; }</script>"
+    llm = ScriptedLLM(
+        [
+            LLMReply(text=candidate),
+            LLMReply(text="", tool_calls=[_patch_call(offending, replacement)]),
+        ]
+    )
+
+    result = generate_unit(
+        _request(tmp_path),
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        out_dir=tmp_path / "out",
+    )
+
+    assert result.status is UnitStatus.OK
+    assert result.calls == 2
+    assert result.findings == []
+    written = result.artifact_path.read_text(encoding="utf-8")
+    assert "new Function" not in written
+    assert run_self_check(result.artifact_path, SKILL_DIR).ok is True
+
+
+def test_the_patch_tool_is_offered_only_once_a_document_exists(tmp_path: Path) -> None:
+    llm = ScriptedLLM([LLMReply(text=BROKEN), LLMReply(text=GOOD)])
+
+    generate_unit(
+        _request(tmp_path),
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        out_dir=tmp_path / "out",
+    )
+
+    def offered(index: int) -> set[str]:
+        return {tool["function"]["name"] for tool in llm.tools[index] or []}
+
+    # Nothing has been built on the first turn, so there is nothing to edit.
+    assert PATCH_TOOL not in offered(0)
+    # The repair turn has a rejected document, so editing it is on the table.
+    assert PATCH_TOOL in offered(1)
+
+
+def test_an_ambiguous_edit_is_refused_instead_of_guessing(tmp_path: Path) -> None:
+    twice = (
+        '<html><head><title>Unit 12</title></head>'
+        "<body><p>Waves</p><p>Waves</p></body></html>"
+    )
+    llm = ScriptedLLM(
+        [
+            LLMReply(text=twice),
+            LLMReply(text="", tool_calls=[_patch_call("<p>Waves</p>", "<p>x</p>")]),
+            LLMReply(text=DRAFT),
+        ]
+    )
+
+    result = generate_unit(
+        _request(tmp_path),
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        out_dir=tmp_path / "out",
+        checker=_verdicts(
+            CheckResult(False, ["figure 1 has no accessible name"]), CheckResult(True, [])
+        ),
+    )
+
+    assert result.status is UnitStatus.OK
+    refusals = [m for m in llm.seen[2] if m.get("role") == "tool"]
+    assert any("matched 2 times" in m["content"] for m in refusals)
+    # The ambiguous edit touched nothing, so the guessed replacement is absent.
+    assert "<p>x</p>" not in result.artifact_path.read_text(encoding="utf-8")
+
+
+def test_a_patch_that_still_fails_reports_the_new_findings(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            LLMReply(text=DRAFT),
+            LLMReply(
+                text="",
+                tool_calls=[_patch_call("<p>Waves</p>", "<p>Waves and energy</p>")],
+            ),
+            LLMReply(text=DRAFT),
+        ]
+    )
+
+    result = generate_unit(
+        _request(tmp_path),
+        llm=llm,
+        bundle=load_bundle(SKILL_DIR),
+        fonts_css="",
+        out_dir=tmp_path / "out",
+        checker=_verdicts(
+            CheckResult(False, ["first problem"]),
+            CheckResult(False, ["second problem"]),
+            CheckResult(True, []),
+        ),
+    )
+
+    assert result.status is UnitStatus.OK
+    feedback = [m for m in llm.seen[2] if m.get("role") == "tool"]
+    assert any("still fails verification" in m["content"] for m in feedback)
+    assert any("second problem" in m["content"] for m in feedback)
+
+
+def _traced_records(trace: Trace, event: str) -> list[dict]:
+    records = [
+        json.loads(line) for line in trace.path.read_text(encoding="utf-8").splitlines()
+    ]
+    return [record for record in records if record["event"] == event]
+
+
+def test_logged_findings_keeps_short_text_and_bounds_long_text() -> None:
+    assert logged_findings(["svg is missing role=img"]) == ["svg is missing role=img"]
+
+    long_finding = "x" * (FINDING_LOG_LIMIT + 50)
+    assert logged_findings([long_finding]) == ["x" * (FINDING_LOG_LIMIT - 3) + "..."]
+
+    many = logged_findings([f"finding {index}" for index in range(FINDING_LOG_MAX + 3)])
+    assert len(many) == FINDING_LOG_MAX + 1
+    assert many[-1] == "... and 3 more"
+
+
+def test_a_repaired_artifact_still_records_the_checker_finding_text(tmp_path: Path) -> None:
+    llm = ScriptedLLM([LLMReply(text=BROKEN), LLMReply(text=GOOD)])
+    trace = trace_for(tmp_path / "jobs", "unit-repaired")
+    verdicts = [CheckResult(False, ["svg is missing role=img"]), CheckResult(True, [])]
+
+    def checker(path: Path, skill_dir: Path) -> CheckResult:
+        return verdicts.pop(0)
+
+    with use_trace(trace):
+        result = generate_unit(
+            _request(tmp_path),
+            llm=llm,
+            bundle=load_bundle(SKILL_DIR),
+            fonts_css="",
+            out_dir=tmp_path / "out",
+            checker=checker,
+        )
+
+    assert result.status is UnitStatus.OK
+    # A run that repairs itself publishes with an empty finding list, so the trace
+    # is the only place the rejected artifact's messages survive.
+    assert result.findings == []
+
+    checking = _traced_records(trace, "artifact.checker")[0]
+    assert checking["messages"] == ["svg is missing role=img"]
+    rejected = _traced_records(trace, "artifact.rejected")[0]
+    assert rejected["findings"] == 1
+    assert "svg is missing role=img" in rejected["messages"]
+
+
+def test_policy_findings_are_recorded_as_text(tmp_path: Path) -> None:
+    candidate = GOOD.replace("<body>", '<body><img src="assets/page.png" alt="page">', 1)
+    llm = ScriptedLLM([LLMReply(text=candidate), LLMReply(text=GOOD)])
+    trace = trace_for(tmp_path / "jobs", "unit-policy")
+
+    with use_trace(trace):
+        result = generate_unit(
+            _request(tmp_path),
+            llm=llm,
+            bundle=load_bundle(SKILL_DIR),
+            fonts_css="",
+            out_dir=tmp_path / "out",
+            checker=lambda path, skill_dir: CheckResult(True, []),
+        )
+
+    assert result.status is UnitStatus.OK
+    policy = _traced_records(trace, "artifact.policy")[0]
+    assert policy["messages"]
+    assert any("relative" in message for message in policy["messages"])

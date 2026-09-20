@@ -9,6 +9,8 @@ from pathlib import Path
 import pymupdf
 from PIL import Image
 
+from backend.diagnostics.trace import span
+
 MAX_EDGE = 1536
 QUALITY = 82
 # 200 DPI before downscaling keeps small print legible at the 1536px bound.
@@ -105,24 +107,29 @@ def normalize_image(
     JPEG quality) and cache the result next to the source so the tool loop and
     retries stay cheap.
     """
-    out_dir.mkdir(parents=True, exist_ok=True)
-    target = out_dir / f"{ordinal:04d}.jpg"
-    if target.is_file():
-        try:
-            with Image.open(target) as existing:
-                if existing.format == "JPEG" and max(existing.size) <= max_edge:
-                    existing.load()
-                else:
-                    raise ValueError("cached image no longer matches the constraints")
-            return InputImage(ordinal, target, "image/jpeg", image_path.name)
-        except (Image.DecompressionBombError, OSError, SyntaxError, ValueError):
-            pass
+    with span("ingest.normalize", ordinal=ordinal, source=image_path.name) as normalizing:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        target = out_dir / f"{ordinal:04d}.jpg"
+        if target.is_file():
+            try:
+                with Image.open(target) as existing:
+                    if existing.format == "JPEG" and max(existing.size) <= max_edge:
+                        existing.load()
+                    else:
+                        raise ValueError("cached image no longer matches the constraints")
+                normalizing["cached"] = True
+                return InputImage(ordinal, target, "image/jpeg", image_path.name)
+            except (Image.DecompressionBombError, OSError, SyntaxError, ValueError):
+                pass
 
-    with Image.open(image_path) as opened:
-        image = opened.convert("RGB")
-    image.thumbnail((max_edge, max_edge), Image.LANCZOS)
-    _write_jpeg(image, target, quality)
-    return InputImage(ordinal, target, "image/jpeg", image_path.name)
+        with Image.open(image_path) as opened:
+            image = opened.convert("RGB")
+        image.thumbnail((max_edge, max_edge), Image.LANCZOS)
+        _write_jpeg(image, target, quality)
+        normalizing["cached"] = False
+        normalizing["source_bytes"] = image_path.stat().st_size
+        normalizing["jpeg_bytes"] = target.stat().st_size
+        return InputImage(ordinal, target, "image/jpeg", image_path.name)
 
 
 def page_count(pdf_path: Path) -> int:
@@ -147,16 +154,22 @@ def rasterize(
     with pymupdf.open(pdf_path) as doc:
         for number in page_numbers:
             target = out_dir / f"{number:04d}.jpg"
-            if target.is_file():
-                cached = _read_cached_page(number, target, max_edge)
-                if cached is not None:
-                    images.append(cached)
-                    continue
-            pixmap = doc[number - 1].get_pixmap(matrix=pymupdf.Matrix(ZOOM, ZOOM))
-            image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
-            image.thumbnail((max_edge, max_edge), Image.LANCZOS)
-            _write_jpeg(image, target, quality)
-            images.append(PageImage(number, target, *image.size))
+            with span("ingest.page", page=number, pages=len(page_numbers)) as page_span:
+                if target.is_file():
+                    cached = _read_cached_page(number, target, max_edge)
+                    if cached is not None:
+                        page_span["cached"] = True
+                        page_span["jpeg_bytes"] = target.stat().st_size
+                        images.append(cached)
+                        continue
+                pixmap = doc[number - 1].get_pixmap(matrix=pymupdf.Matrix(ZOOM, ZOOM))
+                image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+                image.thumbnail((max_edge, max_edge), Image.LANCZOS)
+                _write_jpeg(image, target, quality)
+                page_span["cached"] = False
+                page_span["pixels"] = f"{image.size[0]}x{image.size[1]}"
+                page_span["jpeg_bytes"] = target.stat().st_size
+                images.append(PageImage(number, target, *image.size))
     return images
 
 

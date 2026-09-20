@@ -4,16 +4,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
-# DeepSeek advertises max/high/low in OpenRouter's model metadata (default:
-# high) and marks reasoning optional. "high" is the model's own default and,
-# per OpenRouter's docs, allocates roughly 80% of max_tokens to reasoning —
-# enough headroom to think without starving the document of visible output.
+# This model supports only max/high/low — there is no "medium" — and "high" is
+# its own default. A probe on a fixed task measured roughly 3.2k reasoning
+# tokens at "low", 4.4k at "high" and 5.7k at "max", so the parameter is
+# honored and "low" is the fastest valid setting. "high" is kept because it is
+# the model working as intended; "low" is the lever if speed must beat quality.
 DEFAULT_REASONING_EFFORT = "high"
 # Reasoning and visible output share this budget, so it must cover both.
 # DeepSeek's own ceiling is 384,000 and this cap sits below it. Even at "high"
 # effort reasoning is headroom-hungry: on the previous model, 46,493 reasoning
 # tokens on a 21-image source truncated a document mid-diagram at a 65,536 cap.
 # A cap is a ceiling, not a charge.
+#
+# Lowering this cap cannot save time, and a probe proved it: at max_tokens=2000
+# the model spent exactly 2000 tokens reasoning and returned no answer at all,
+# because the two share one budget. A tight cap starves the document, not the
+# thinking.
 DEFAULT_MAX_OUTPUT_TOKENS = 200000
 
 

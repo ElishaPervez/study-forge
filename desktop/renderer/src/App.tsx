@@ -33,6 +33,7 @@ import {
 } from "./components/SourceIntake";
 import type { ImageFile } from "./components/ImageGroupEditor";
 import { GlobalDropIndicator, useGlobalFileDrop } from "./useGlobalFileDrop";
+import { traceElapsedMs, traceLog, traceNow } from "./traceLog";
 
 type StartupState = "starting" | "ready" | "error";
 export type WorkState =
@@ -970,6 +971,10 @@ export function App() {
     // not wait for the guide: it follows the queue instead.
     if (!canForge || api === null || source === null || forgePendingRef.current) return;
     forgePendingRef.current = true;
+    // The trace starts at the click, not at the request: everything between the
+    // two is what the user is waiting on.
+    const forgeStartedAt = traceNow();
+    traceLog("forge.clicked", { source_id: source.sourceId, kind: source.kind });
 
     setExportFeedback(null);
     setRevisionSelection(null);
@@ -995,6 +1000,11 @@ export function App() {
       historyLoadGuard.invalidate();
       createAttempted = true;
       const outcome = await queue.submitGuide(currentSource.sourceId, selection);
+      traceLog("forge.accepted", {
+        receipt: outcome.operation?.receipt ?? null,
+        guide_id: outcome.guide_id,
+        duration_ms: traceElapsedMs(forgeStartedAt),
+      });
       const accepted = outcome.guide ?? (await api.getGuide(outcome.guide_id));
       setGuide(accepted);
       setActiveTab("guide");
@@ -1005,6 +1015,10 @@ export function App() {
     } catch (error: unknown) {
       if (createAttempted) await refreshHistory();
       const message = error instanceof Error ? error.message : "The local service rejected the guide.";
+      traceLog("forge.failed", {
+        error: message,
+        duration_ms: traceElapsedMs(forgeStartedAt),
+      });
       if (isSourceReadError(message)) {
         setSourceError(message);
         setSetupError(null);

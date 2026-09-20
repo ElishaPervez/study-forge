@@ -41,8 +41,16 @@ class StreamedReply:
 class StreamAccumulator:
     """Feed raw event lines in; read the assembled reply out."""
 
-    def __init__(self, *, on_text: Callable[[str], None] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        on_text: Callable[[str], None] | None = None,
+        on_event: Callable[[str], None] | None = None,
+    ) -> None:
         self._on_text = on_text
+        # Timing instrumentation observes the shape of the stream: when lines
+        # arrive and what kind they were, so a slow reply can be explained.
+        self._on_event = on_event
         self._text_parts: list[str] = []
         self._reasoning_parts: list[str] = []
         self._tool_calls: dict[int, ToolCallFragment] = {}
@@ -60,6 +68,8 @@ class StreamAccumulator:
     def feed_line(self, line: str) -> None:
         if line.startswith(":"):
             # A keepalive comment is not output.
+            if self._on_event is not None:
+                self._on_event("keepalive")
             return
         stripped = line.strip()
         if not stripped or not stripped.startswith("data:"):
@@ -67,8 +77,12 @@ class StreamAccumulator:
         data = stripped[len("data:") :].strip()
         if not data:
             return
+        if self._on_event is not None:
+            self._on_event("line")
         if data == DONE_MARKER:
             self.done = True
+            if self._on_event is not None:
+                self._on_event("done")
             return
         try:
             payload = json.loads(data)
@@ -83,7 +97,11 @@ class StreamAccumulator:
         if isinstance(error, dict):
             message = error.get("message")
             self.error = str(message) if message else "the model provider reported an error"
+            if self._on_event is not None:
+                self._on_event("error")
             return
+        if payload.get("usage") is not None and self._on_event is not None:
+            self._on_event("usage")
         self._read_usage(payload.get("usage"))
         choices = payload.get("choices")
         if choices is None:
@@ -139,18 +157,24 @@ class StreamAccumulator:
         # Hidden reasoning is never counted as generated HTML.
         if isinstance(reasoning, str) and reasoning:
             self._reasoning_parts.append(reasoning)
+            if self._on_event is not None:
+                self._on_event("reasoning")
 
     def _read_content(self, content: object) -> None:
         if isinstance(content, str) and content:
             self._text_parts.append(content)
             if self._on_text is not None:
                 self._on_text(content)
+            if self._on_event is not None:
+                self._on_event("text")
 
     def _read_tool_calls(self, tool_calls: object) -> None:
         if tool_calls is None:
             return
         if not isinstance(tool_calls, list):
             raise StreamError("malformed event tool calls")
+        if self._on_event is not None:
+            self._on_event("tool_call")
         for entry in tool_calls:
             if not isinstance(entry, dict):
                 raise StreamError("malformed event tool call")

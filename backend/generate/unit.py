@@ -12,6 +12,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from threading import Event
 
+from backend.diagnostics.trace import record, span
 from backend.fonts.embed import inject_fonts
 from backend.generate.progress import (
     ACTIVITY_CHECKING,
@@ -34,9 +35,19 @@ MAX_CALLS = 3
 # Reference lookups are not generation attempts. Sharing one budget let the model
 # spend every call reading references and never get to write, or repair, an artifact.
 MAX_TOOL_TURNS = 6
+# A repair can be expressed as exact-text edits instead of a rewritten document.
+# Two rounds is enough to recover from an over-broad match; past that, another
+# round trip costs more than naming the whole document would have.
+MAX_PATCHES = 2
+PATCH_TOOL = "apply_edits"
 STOPPED_FINDING = "work was stopped before a guide was completed"
 RETRY_BACKOFF_BASE_SECONDS = 0.1
 RETRY_BACKOFF_MAX_SECONDS = 1.0
+# Findings are traced as text, not only as a count. A run that repairs itself
+# publishes with an empty finding list, so the rejected artifact's messages are
+# the only record of why the repair happened - and were previously thrown away.
+FINDING_LOG_LIMIT = 400
+FINDING_LOG_MAX = 12
 V1_FORBIDDEN_TAGS = {"base", "embed", "object", "iframe"}
 ALLOWED_SCRIPT_ATTRIBUTES = {
     "data-guide-controls",
@@ -324,10 +335,10 @@ def _v1_output_policy_findings(html: str) -> list[str]:
     return parser.findings
 
 
-def _tools(bundle: Bundle) -> list[dict]:
+def _tools(bundle: Bundle, *, allow_edits: bool = False) -> list[dict]:
     names = sorted(bundle.references)
     listing = "; ".join(f"{name} ({bundle.references[name].title})" for name in names)
-    return [
+    tools = [
         {
             "type": "function",
             "function": {
@@ -352,6 +363,50 @@ def _tools(bundle: Bundle) -> list[dict]:
             },
         },
     ]
+    if allow_edits:
+        # Offered only once a document exists to patch, so a first draft cannot
+        # be "edited" into being. An edit carries a few dozen tokens where a
+        # rewritten document carries tens of thousands.
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": PATCH_TOOL,
+                    "description": (
+                        "Repair the current document in place with exact-text replacements. "
+                        "Each find must appear in the document exactly once. Prefer this "
+                        "over writing the document out again."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "edits": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "find": {
+                                            "type": "string",
+                                            "description": "exact text from the document",
+                                        },
+                                        "replace": {
+                                            "type": "string",
+                                            "description": "text to put in its place",
+                                        },
+                                    },
+                                    "required": ["find", "replace"],
+                                    "additionalProperties": False,
+                                },
+                            }
+                        },
+                        "required": ["edits"],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        )
+    return tools
 
 
 def _malformed_arguments(arguments: object) -> str | None:
@@ -360,11 +415,76 @@ def _malformed_arguments(arguments: object) -> str | None:
     return None
 
 
+def _apply_edits(document: str, arguments: object) -> tuple[str | None, str]:
+    """Replace exact text in the document. Every edit must match or nothing is applied.
+
+    Matching is deliberately strict. A patch that quietly matched the wrong span, or
+    two spans, would corrupt a document that already passed every other gate, so an
+    ambiguous find is refused and the model is told which edit failed and why.
+    """
+    if not isinstance(arguments, dict):
+        return None, "malformed tool arguments: apply_edits needs an edits list"
+    edits = arguments.get("edits")
+    if not isinstance(edits, list) or not edits:
+        return None, "malformed tool arguments: apply_edits needs a non-empty edits list"
+    patched = document
+    for position, edit in enumerate(edits, start=1):
+        if not isinstance(edit, dict):
+            return None, f"edit {position} is not an object with find and replace"
+        find = edit.get("find")
+        replace = edit.get("replace")
+        if not isinstance(find, str) or not find:
+            return None, f"edit {position} needs a non-empty find string"
+        if not isinstance(replace, str):
+            return None, f"edit {position} needs a replace string"
+        occurrences = patched.count(find)
+        if occurrences == 0:
+            return None, f"edit {position} matched no text; copy the document exactly"
+        if occurrences > 1:
+            return None, f"edit {position} matched {occurrences} times; add more context"
+        patched = patched.replace(find, replace, 1)
+    return patched, f"applied {len(edits)} edit(s)"
+
+
+def _patched_document(
+    calls: Sequence[ToolCall], document: str | None, patches_used: int
+) -> tuple[str | None, str]:
+    """Apply this turn's patch request to the current document, if it made one."""
+    patch = next((call for call in calls if call.name == PATCH_TOOL), None)
+    if patch is None:
+        return None, ""
+    if document is None:
+        return None, "there is no document to patch yet; return the complete HTML document"
+    if patches_used >= MAX_PATCHES:
+        return None, (
+            f"the patch limit ({MAX_PATCHES}) is used up; "
+            "return the complete corrected HTML document instead"
+        )
+    try:
+        arguments = json.loads(patch.arguments or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return None, "malformed tool arguments: apply_edits needs an edits list"
+    return _apply_edits(document, arguments)
+
+
 def _resolve_tool_calls(
-    calls: Sequence[ToolCall], bundle: Bundle, requested: list[str]
+    calls: Sequence[ToolCall],
+    bundle: Bundle,
+    requested: list[str],
+    *,
+    patch_note: str | None = None,
 ) -> list[dict]:
     results: list[dict] = []
     for call in calls:
+        if call.name == PATCH_TOOL:
+            results.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": patch_note or "edits were not applied",
+                }
+            )
+            continue
         if call.name not in {"list_references", "read_reference"}:
             content = f"unknown tool: {call.name!r}"
             results.append({"role": "tool", "tool_call_id": call.id, "content": content})
@@ -393,7 +513,9 @@ def _resolve_tool_calls(
                     else:
                         requested.append(name)
                         try:
-                            content = reference.path.read_text(encoding="utf-8")
+                            with span("tool.read_reference", name=name) as read:
+                                content = reference.path.read_text(encoding="utf-8")
+                                read["chars"] = len(content)
                         except OSError as error:
                             content = f"reference unavailable: {error}"
         results.append({"role": "tool", "tool_call_id": call.id, "content": content})
@@ -469,6 +591,49 @@ def _write_atomic(path: Path, text: str) -> None:
                 pass
 
 
+def _build_artifact(
+    document_text: str, *, artifact_path: Path, fonts_css: str
+) -> tuple[str, str]:
+    """Strip, render math, embed fonts and write. Returns the HTML and its source.
+
+    A patched document takes this same path as a freshly written one, so an edited
+    artifact is built and measured exactly like a rewritten one.
+    """
+    with span("artifact.build", reply_chars=len(document_text)) as build:
+        with span("artifact.strip_fences"):
+            document = _strip_fences(document_text)
+        with span("artifact.mathml", chars=len(document)) as mathml:
+            rendered = render_math(document)
+            mathml["html_chars"] = len(rendered)
+            mathml["math_elements"] = rendered.count("<math")
+        with span("artifact.fonts", chars=len(rendered)) as fonts:
+            html = inject_fonts(rendered, fonts_css)
+            fonts["html_chars"] = len(html)
+        build["html_chars"] = len(html)
+        with span("artifact.write", chars=len(html), bytes=len(html.encode("utf-8"))):
+            _write_atomic(artifact_path, html)
+    return html, document
+
+
+def _verify_artifact(
+    html: str,
+    artifact_path: Path,
+    bundle: Bundle,
+    checker: Callable[[Path, Path], CheckResult],
+) -> list[str]:
+    """Policy plus the skill's own checker. An empty list means it is publishable."""
+    with span("artifact.policy", chars=len(html)) as policy:
+        policy_findings = _v1_output_policy_findings(html)
+        policy["findings"] = len(policy_findings) or None
+        policy["messages"] = logged_findings(policy_findings) or None
+    with span("artifact.checker") as checking:
+        result = checker(artifact_path, bundle.skill_dir)
+        checking["ok"] = result.ok
+        checking["findings"] = len(result.findings) or None
+        checking["messages"] = logged_findings(result.findings) or None
+    return [*policy_findings, *result.findings]
+
+
 def _empty_reply_finding(reply: LLMReply) -> str:
     """Explain a completion that carried no text, instead of blaming an artifact."""
     if reply.finish_reason == "length":
@@ -489,6 +654,17 @@ def _truncated_reply_finding(reply: LLMReply) -> str:
     )
 
 
+def logged_findings(findings: Sequence[str]) -> list[str]:
+    """Findings for the trace: enough text to diagnose, bounded in the JSONL."""
+    kept = [
+        finding if len(finding) <= FINDING_LOG_LIMIT else finding[: FINDING_LOG_LIMIT - 3] + "..."
+        for finding in findings[:FINDING_LOG_MAX]
+    ]
+    if len(findings) > FINDING_LOG_MAX:
+        kept.append(f"... and {len(findings) - FINDING_LOG_MAX} more")
+    return kept
+
+
 def _empty_reply_prompt(finding: str) -> str:
     return (
         "Your previous reply contained no HTML at all, so there was nothing to verify:\n"
@@ -503,8 +679,11 @@ def _repair_prompt(findings: Sequence[str]) -> str:
     return (
         "The artifact failed verification:\n"
         f"{details}\n\n"
-        "Return the corrected complete HTML document only. Preserve the offline and "
-        "accessible SVG requirements from the original request."
+        f"Fix only what failed, by calling {PATCH_TOOL} with exact-text replacements "
+        "against the document as you wrote it, and leave everything else untouched. "
+        "Return the corrected complete HTML document only if the repair cannot be "
+        "expressed as edits. Preserve the offline and accessible SVG requirements "
+        "from the original request."
     )
 
 
@@ -558,7 +737,13 @@ def generate_unit(
     artifact_path = artifacts / "artifact.html"
     published = False
 
-    content: list[dict] = [image_part(image) for image in request.pages]
+    content: list[dict] = []
+    with span("payload.images", count=len(request.pages)) as encoding:
+        for image in request.pages:
+            content.append(image_part(image))
+        encoding["payload_chars"] = sum(
+            len(part["image_url"]["url"]) for part in content
+        )
     initial_message = (
         build_initial_message(request.source_kind, len(request.pages), request.selection)
         if request.selection is not None
@@ -574,6 +759,10 @@ def generate_unit(
     repair_used = False
     attempts = 0
     tool_turns = 0
+    patches_used = 0
+    # The document a patch would edit. Set as soon as something has been built, so
+    # the repair turn can offer edits instead of a full rewrite.
+    candidate: str | None = None
 
     while attempts < budget:
         if stopped_work(stop):
@@ -582,20 +771,41 @@ def generate_unit(
             )
         if tool_turns >= MAX_TOOL_TURNS:
             last_findings = [
-                "reference lookups exhausted their allowance before any HTML was written"
+                "tool turns exhausted before the artifact passed verification"
+                if candidate is not None
+                else "reference lookups exhausted their allowance before any HTML was written"
             ]
             break
         calls += 1
         if progress is not None:
             progress.begin_attempt()
             progress.set_activity(ACTIVITY_WAITING)
+        attempt = attempts + 1
+        record(
+            "llm.call.started",
+            call=calls,
+            attempt=attempt,
+            tool_turn=tool_turns,
+            messages=len(messages),
+            repair=repair_used,
+        )
         try:
-            reply: LLMReply = llm.complete(
-                messages,
-                tools=_tools(bundle),
-                on_text=progress.observe if progress is not None else None,
-                stop=stop,
-            )
+            with span(
+                "llm.attempt",
+                call=calls,
+                attempt=attempt,
+                messages=len(messages),
+                repair=repair_used,
+            ) as attempt_span:
+                reply: LLMReply = llm.complete(
+                    messages,
+                    tools=_tools(bundle, allow_edits=candidate is not None),
+                    on_text=progress.observe if progress is not None else None,
+                    stop=stop,
+                )
+                attempt_span["text_chars"] = len(reply.text or "")
+                attempt_span["tool_calls"] = len(reply.tool_calls) or None
+                attempt_span["finish_reason"] = reply.finish_reason or None
         except LLMStopped:
             return _failed_result(
                 UnitStatus.FAILED, calls, requested, artifact_path, published, [STOPPED_FINDING]
@@ -615,15 +825,54 @@ def generate_unit(
                 )
             if progress is not None:
                 progress.set_activity(ACTIVITY_RETRYING)
-            time.sleep(_backoff_seconds(calls))
+            backoff = _backoff_seconds(calls)
+            record("llm.retry_backoff", seconds=backoff, error=error_finding)
+            time.sleep(backoff)
             continue
+        record(
+            "llm.call.finished",
+            call=calls,
+            text_chars=len(reply.text or "") or None,
+            tool_calls=len(reply.tool_calls) or None,
+            finish_reason=reply.finish_reason or None,
+        )
 
         if reply.tool_calls:
             tool_turns += 1
+            patch_note: str | None = None
+            patched, note = _patched_document(reply.tool_calls, candidate, patches_used)
+            if patched is not None:
+                patches_used += 1
+                record("repair.patched", call=calls, edits=patches_used)
+                html, candidate = _build_artifact(
+                    patched, artifact_path=artifact_path, fonts_css=fonts_css
+                )
+                published = True
+                if status_callback is not None:
+                    status_callback(UnitStatus.VERIFYING)
+                findings = _verify_artifact(html, artifact_path, bundle, checker)
+                if not findings:
+                    return UnitResult(UnitStatus.OK, calls, list(requested), artifact_path, [])
+                # The patch is kept on disk and reported like any rejected build: the
+                # model gets the new findings and may edit again or rewrite outright.
+                last_findings = findings
+                record(
+                    "artifact.rejected",
+                    call=calls,
+                    findings=len(findings),
+                    messages=logged_findings(findings),
+                )
+                note = (
+                    "the edits were applied, but the artifact still fails verification:\n"
+                    + "\n".join(f"- {finding}" for finding in findings)
+                )
+            patch_note = note or None
             if progress is not None:
-                # A reference turn is not writing: its provisional count is dropped.
+                # A tool turn is not a new draft: its provisional count is dropped.
                 progress.discard_attempt_progress()
-                progress.set_activity(ACTIVITY_REFERENCES)
+                progress.set_activity(
+                    ACTIVITY_CORRECTING if patched is not None else ACTIVITY_REFERENCES
+                )
             messages.append(
                 {
                     "role": "assistant",
@@ -638,7 +887,9 @@ def generate_unit(
                     ],
                 }
             )
-            messages.extend(_resolve_tool_calls(reply.tool_calls, bundle, requested))
+            messages.extend(
+                _resolve_tool_calls(reply.tool_calls, bundle, requested, patch_note=patch_note)
+            )
             continue
 
         attempts += 1
@@ -661,28 +912,34 @@ def generate_unit(
                 status_callback(UnitStatus.REPAIRING)
             if progress is not None:
                 progress.set_activity(ACTIVITY_CORRECTING)
+            record("repair.empty_reply", call=calls, finding=last_findings[0])
             continue
 
         if stopped_work(stop):
             return _failed_result(
                 UnitStatus.FAILED, calls, requested, artifact_path, published, [STOPPED_FINDING]
             )
-        html = inject_fonts(render_math(_strip_fences(reply.text or "")), fonts_css)
-        _write_atomic(artifact_path, html)
+        html, candidate = _build_artifact(
+            reply.text or "", artifact_path=artifact_path, fonts_css=fonts_css
+        )
         published = True
         if status_callback is not None:
             status_callback(UnitStatus.VERIFYING)
         if progress is not None:
             progress.set_activity(ACTIVITY_CHECKING)
-        policy_findings = _v1_output_policy_findings(html)
-        result = checker(artifact_path, bundle.skill_dir)
-        if result.ok and not policy_findings:
+        findings = _verify_artifact(html, artifact_path, bundle, checker)
+        if not findings:
             return UnitResult(UnitStatus.OK, calls, list(requested), artifact_path, [])
 
-        findings = [*policy_findings, *result.findings]
         if reply.finish_reason == "length":
             findings.append(_truncated_reply_finding(reply))
         last_findings = findings or ["v1 output policy or checker rejected artifact"]
+        record(
+            "artifact.rejected",
+            call=calls,
+            findings=len(last_findings),
+            messages=logged_findings(last_findings),
+        )
         if repair_used or attempts >= budget:
             return _failed_result(
                 UnitStatus.NEEDS_ATTENTION,
@@ -700,6 +957,12 @@ def generate_unit(
             status_callback(UnitStatus.REPAIRING)
         if progress is not None:
             progress.set_activity(ACTIVITY_CORRECTING)
+        record(
+            "repair.requested",
+            call=calls,
+            findings=len(last_findings),
+            messages=logged_findings(last_findings),
+        )
 
     return _failed_result(
         UnitStatus.NEEDS_ATTENTION,

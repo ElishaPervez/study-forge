@@ -9,6 +9,7 @@ import type {
   RevisionRequest,
 } from "./api";
 import { ApiError } from "./api";
+import { traceElapsedMs, traceLog, traceNow } from "./traceLog";
 
 export const ACTIVE_REFRESH_MS = 500;
 export const IDLE_REFRESH_MS = 2000;
@@ -290,6 +291,8 @@ export function useGenerationQueue(options: UseGenerationQueueOptions): Generati
       const service = api;
       const request = receiptsRef.current.get(key) ?? newReceipt();
       receiptsRef.current.set(key, request);
+      const traceStartedAt = traceNow();
+      traceLog("submit.started", { key, receipt: request, guide_id: guideId });
       // The desktop refuses this handshake once a quit decision has started, so
       // a request can never be sent into a service that is already stopping.
       const bridge = typeof window === "undefined" ? undefined : window.studyForge;
@@ -310,10 +313,24 @@ export function useGenerationQueue(options: UseGenerationQueueOptions): Generati
         let guide: GuideView;
         try {
           guide = await send(service, request);
+          traceLog("submit.accepted", {
+            key,
+            receipt: request,
+            guide_id: guide.guide_id,
+            status: guide.status,
+            duration_ms: traceElapsedMs(traceStartedAt),
+          });
         } catch (caught) {
           if (caught instanceof ApiError) {
             // The service answered, so this receipt is resolved either way.
             receiptsRef.current.delete(key);
+            traceLog("submit.refused", {
+              key,
+              receipt: request,
+              status: caught.status,
+              error: caught.message,
+              duration_ms: traceElapsedMs(traceStartedAt),
+            });
             throw caught;
           }
           // The reply was lost. Find out whether the service recorded the request.
@@ -321,6 +338,13 @@ export function useGenerationQueue(options: UseGenerationQueueOptions): Generati
             const row = await service.getOperation(request);
             receiptsRef.current.delete(key);
             acceptLocally(row);
+            traceLog("submit.recovered", {
+              key,
+              receipt: request,
+              guide_id: row.guide_id,
+              state: row.state,
+              duration_ms: traceElapsedMs(traceStartedAt),
+            });
             return { guide_id: row.guide_id, guide: null, operation: row };
           } catch (lookup) {
             if (lookup instanceof ApiError && lookup.status === 404) {
@@ -331,6 +355,12 @@ export function useGenerationQueue(options: UseGenerationQueueOptions): Generati
             setError(
               caught instanceof Error ? caught.message : "the submission could not be confirmed",
             );
+            traceLog("submit.unconfirmed", {
+              key,
+              receipt: request,
+              error: caught instanceof Error ? caught.message : "the submission failed",
+              duration_ms: traceElapsedMs(traceStartedAt),
+            });
             throw caught;
           }
         }

@@ -5,6 +5,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from backend.diagnostics.trace import span
+
 FINDING_PREFIX = "  - "
 TIMEOUT_SECONDS = 60
 
@@ -25,15 +27,19 @@ def run_self_check(
     if not html_path.is_file():
         return CheckResult(False, [f"HTML file not found at {html_path}"])
     try:
-        completed = subprocess.run(
-            [python_executable or sys.executable, str(script), str(html_path)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=TIMEOUT_SECONDS,
-            check=False,
-        )
+        with span("checker.subprocess", script=script.name, path=html_path.name) as running:
+            completed = subprocess.run(
+                [python_executable or sys.executable, str(script), str(html_path)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=TIMEOUT_SECONDS,
+                check=False,
+            )
+            running["returncode"] = completed.returncode
+            running["stdout_chars"] = len(completed.stdout or "")
+            running["stderr_chars"] = len(completed.stderr or "")
     except subprocess.TimeoutExpired:
         return CheckResult(False, [f"checker timed out after {TIMEOUT_SECONDS}s"])
     except OSError as exc:

@@ -62,8 +62,9 @@ backend/            Python service (FastAPI + pydantic + latex2mathml)
   generate/revision.py  selection-scoped revision using the same loop and checks
   generate/runner.py    runs one accepted queue request against a guide
   generate/progress.py  live line/character counts and activity labels while writing
+  diagnostics/trace.py  per-request timing traces (JSONL) + stderr mirror + summary
   prompt/build.py   output policy text, initial/unit/revision messages, title extraction
-  llm/client.py     OpenRouter chat client (tool calls, usage, finish reason)
+  llm/client.py     OpenRouter chat client (tool calls, usage, finish reason, call timing)
   llm/stream.py     incremental SSE parsing that feeds progress as text arrives
   skill/bundle.py   SKILL.md + style-guide.md + study-guide.md -> system prompt
   skill/manifest.py reference manifest from references/*.md
@@ -84,6 +85,7 @@ desktop/            Electron shell + React renderer (TypeScript, Vite)
 
 diagram-design/     vendored design-system skill (SKILL.md, references/, assets/, scripts/)
 assets/fonts/       embedded woff2 faces (Instrument Serif, Geist, Geist Mono)
+scripts/generation_report.py  reads `jobs/logs/*.jsonl` back as a timeline
 tests/              backend pytest suite, mirrored by module
 ```
 
@@ -145,6 +147,36 @@ and one worker thread advances them in order, exactly one at a time:
   retry, and revision for a guide whose request is active (`GuideBusyError` -> 409).
 - `GET /api/queue` returns rows with state, order, guide name, activity, line/character counts,
   and last-output time; the renderer polls it faster while work is moving.
+
+**Timing traces** (`backend/diagnostics/trace.py`) answer where the wall-clock time actually
+goes. Every accepted request owns one trace file, `<jobs_dir>/logs/generation-<receipt>.jsonl`,
+written in arrival order and ending in a summary line; `<jobs_dir>/logs/api.jsonl` records every
+HTTP request with its duration. A trace carries, with monotonic offsets from acceptance:
+
+- acceptance and queue wait (`api.accepted`, `queue.accepted`, `queue.run.started` with
+  `queued_ms`), then `run.load_source` and per-page rasterisation (`ingest.page`, cached or
+  re-rendered, pixels and JPEG bytes), and the base64 payload encoding (`payload.images`);
+- every model call twice over: `llm.attempt` at the generation loop and `llm.http` at the
+transport, the latter carrying time to first byte, time to first byte of visible text, first
+reasoning/tool-call fragment, streamed chars, stalls over 1 s with the longest gap and where it
+happened, 15-second progress checkpoints while a call is still open, token counts, tokens/s,
+and `finish_reason`;
+- the build steps (`artifact.strip_fences`, `artifact.mathml`, `artifact.fonts`,
+  `artifact.write`), the output policy check, the shipped `self_check.py` subprocess measured on
+  its own, and publication;
+- failures as data: `run.failed`, `repair.empty_reply`, `repair.requested`, `llm.retry_backoff`.
+
+Tracing is on by default and never raises into the pipeline. `STUDY_FORGE_TRACE=0` turns it off;
+`STUDY_FORGE_TRACE_MIRROR=0` keeps the files but stops echoing milestones to stderr (the test
+suite sets that). The renderer logs matching `[forge-trace]` console entries - `forge.clicked`,
+`submit.started`, `submit.accepted` - that carry the same receipt, so the click and the
+service's own timeline line up. Read a trace back with:
+
+```bash
+uv run python scripts/generation_report.py                 # latest trace, phases + timeline
+uv run python scripts/generation_report.py --all           # one line per trace
+uv run python scripts/generation_report.py --trace 4f2a    # match a receipt
+```
 
 **Math** (`backend/mathml/render.py`) is rendered at build time, never at view time. The model
 writes LaTeX between `\(...\)` (inline) and `\[...\]` (display), and generation rewrites those
@@ -278,18 +310,19 @@ main process with `taskkill //PID <pid> //T //F`.
 ## Tests and lint
 
 ```bash
-uv run pytest -q            # 345 backend tests
+uv run pytest -q            # 363 backend tests
 uv run ruff check .         # line-length 100
-cd desktop && npm test      # builds, then vitest (217 tests)
+cd desktop && npm test      # builds, then vitest (223 tests)
 cd desktop && npm run build # tsc for main/preload/renderer, then vite bundle
 ```
 
 Backend tests mirror the modules (`tests/api`, `tests/generate`, `tests/ingest`, `tests/jobs`,
-`tests/llm`, `tests/prompt`, `tests/skill`, `tests/verify`, `tests/fonts`, `tests/mathml`) and drive the app
+`tests/llm`, `tests/prompt`, `tests/skill`, `tests/verify`, `tests/fonts`, `tests/mathml`,
+`tests/diagnostics`) and drive the app
 through `fastapi.testclient` with a scripted LLM and `httpx.MockTransport`, so no network or API
 key is needed. Renderer tests cover the extracted pure helpers (placement, clamping, filename
-sanitising, drop-session state, export flow), the queue hook, the queue panel, and the close
-warning, alongside component-render assertions.
+sanitising, drop-session state, export flow), the queue hook, the queue panel, the close
+warning, and the trace logging helper, alongside component-render assertions.
 
 ## Conventions and limits
 
