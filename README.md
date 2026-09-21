@@ -261,7 +261,11 @@ any non-null value locks source controls). Notable behaviours:
   dialog; filenames are ASCII-folded, slugged, and prefixed when they collide with Windows
   reserved device names (`CON`, `LPT1`, ...). Revision ranges are appended as `-pages-a-b`.
 - **Source viewer**: PDF pages and image thumbnails are served by the backend; right-clicking a
-  page offers "set as first/last page" for the range selection.
+  page offers "set as first/last page" for the range selection. Clicking a page opens it enlarged
+  in its own floating window over a blurred backdrop; the window is painted in a body-level portal
+  so the viewer's paint containment cannot clip it, and it retires on the backdrop outside it, on
+  its own close control, or on Escape. Enlarging stays available while a request locks the source,
+  because reading a page never changes the selection.
 - **History**: newest-first; a ready guide opens on plain click, failed ones expose Retry and
   Delete through a keyboard-navigable context menu (`Shift+F10` / context-menu key). A guide with
   work in the queue opens read-only, with its editing actions disabled instead of hidden.

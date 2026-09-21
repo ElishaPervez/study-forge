@@ -1627,6 +1627,16 @@ h3 {
   content-visibility: auto;
 }
 
+/* The page render itself opens the enlarged window. */
+.source-page-image-button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
 .source-page-range-marker {
   position: absolute;
   top: 9px;
@@ -1679,6 +1689,118 @@ h3 {
   background: var(--accent-wash);
   color: var(--accent-hover);
   outline: 0;
+}
+
+/* Enlarged source page: its own floating window over a blurred backdrop, so a
+   page that is too small to read in the grid can be read here. It is painted in
+   a body-level portal above every other surface, and it retires on the backdrop,
+   the close control, or Escape. */
+.source-lightbox {
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 26px;
+  background: rgba(16, 24, 40, 0.36);
+  backdrop-filter: blur(10px) saturate(0.9);
+  -webkit-backdrop-filter: blur(10px) saturate(0.9);
+  animation: sourceLightboxFade 0.16s ease-out;
+}
+
+.source-lightbox-window {
+  display: flex;
+  flex-direction: column;
+  width: min(1080px, 100%);
+  max-height: 100%;
+  margin: 0;
+  overflow: hidden;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--base);
+  box-shadow: 0 28px 64px -18px rgba(16, 24, 40, 0.55);
+  animation: sourceLightboxReveal 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.source-lightbox-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  padding: 6px 6px 6px 14px;
+  border-bottom: 1.5px solid var(--border);
+  background: var(--surface);
+}
+
+.source-lightbox-caption {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: "Geist Mono", monospace;
+  font-size: 0.6rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-lightbox-close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.source-lightbox-close:hover {
+  background: var(--field);
+  color: var(--ink);
+}
+
+.source-lightbox-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: #eef0f3;
+  scrollbar-color: var(--border) transparent;
+  scrollbar-width: thin;
+}
+
+.source-lightbox-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--base);
+}
+
+@keyframes sourceLightboxFade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sourceLightboxReveal {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .results-count {
