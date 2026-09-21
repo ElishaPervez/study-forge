@@ -18,4 +18,8 @@ jobs/
 # `backend/jobs/` contains versioned Python source; runtime job data remains ignored.
 !backend/jobs/
 !backend/jobs/*.py
+# A hand-made copy of the runtime folder and a stray local screenshot stay on
+# this computer too: the copy holds student material and generated guides.
+jobs - Copy*/
+/proof .png
 *.pdf
