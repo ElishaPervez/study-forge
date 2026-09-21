@@ -174,6 +174,8 @@ h3 {
   border-radius: 0;
   background: transparent;
   color: var(--muted);
+  transition: background-color 0.15s ease, color 0.15s ease,
+              transform 0.12s cubic-bezier(0.2, 0, 0, 1);
   -webkit-app-region: no-drag;
 }
 
@@ -251,7 +253,8 @@ h3 {
   background: var(--base);
   color: var(--muted);
   cursor: pointer;
-  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease,
+              transform 0.12s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .rail-toggle:hover {
@@ -269,6 +272,21 @@ h3 {
   flex: none;
 }
 
+/* The sidebar control turns: the chevron it is leaving fades back a quarter turn
+   while the one it is arriving at swings forward, so the button never swaps
+   pictures. */
+.rail-toggle-chevron {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: opacity 0.12s cubic-bezier(0.2, 0, 0, 1),
+              transform 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.rail-toggle-chevron.is-hidden {
+  opacity: 0;
+  transform: rotate(-90deg);
+}
+
 .rail-context {
   flex: 1;
   min-width: 0;
@@ -279,19 +297,24 @@ h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: opacity 0.15s cubic-bezier(0.2, 0, 0, 1), visibility 0.15s;
+  /* The column slides for 190ms; its text gets out of the way first and only
+     comes back once the column has opened, so nothing is read mid-squeeze. */
+  transition: opacity 0.12s cubic-bezier(0.2, 0, 0, 1) 0.1s,
+              visibility 0.12s 0.1s;
 }
 
 .rail.is-compact .rail-context {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
+  transition-delay: 0s, 0s;
 }
 
 .rail.is-compact .rail-form {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
+  transition-delay: 0s, 0s;
 }
 
 .brand {
@@ -331,7 +354,8 @@ h3 {
   min-height: 0;
   gap: 0;
   overflow: hidden;
-  transition: opacity 0.15s cubic-bezier(0.2, 0, 0, 1), visibility 0.15s;
+  transition: opacity 0.12s cubic-bezier(0.2, 0, 0, 1) 0.1s,
+              visibility 0.12s 0.1s;
 }
 
 .rail-section,
@@ -460,6 +484,8 @@ h3 {
   border-radius: 6px;
   background: var(--base);
   color: var(--ink);
+  transition: border-color 0.15s ease, background-color 0.15s ease,
+              transform 0.12s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .secondary-button:hover:not(:disabled) {
@@ -1114,7 +1140,10 @@ h3 {
   min-width: 0;
   padding: 11px 10px 12px;
   border-radius: 7px;
-  transition: background-color 0.22s cubic-bezier(0.2, 0, 0, 1), transform 0.22s cubic-bezier(0.2, 0, 0, 1);
+  /* One curve and one duration for the whole hover, so the lift, the accent bar
+     and the name colour read as a single move rather than three effects. */
+  transition: background-color 0.2s cubic-bezier(0.2, 0, 0, 1),
+              transform 0.2s cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* Only a ready guide opens on a plain left click; its card says so. */
@@ -1130,7 +1159,7 @@ h3 {
   right: 10px;
   height: 1.5px;
   background: var(--border);
-  transition: opacity 0.2s ease;
+  transition: opacity 0.2s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .history-item::after {
@@ -1144,7 +1173,8 @@ h3 {
   background: var(--accent);
   opacity: 0;
   transform: scaleY(0.25);
-  transition: opacity 0.22s cubic-bezier(0.2, 0, 0, 1), transform 0.26s cubic-bezier(0.2, 0, 0, 1);
+  transition: opacity 0.2s cubic-bezier(0.2, 0, 0, 1),
+              transform 0.2s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .history-item:first-child::before {
@@ -1217,14 +1247,14 @@ h3 {
   font-family: Geist, "Segoe UI", sans-serif;
   font-size: 0.68rem;
   font-weight: 600;
-  transition: color 0.18s ease;
+  transition: color 0.2s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .history-item-source,
 .history-item-selection {
   color: var(--muted);
   font-size: 0.58rem;
-  transition: color 0.18s ease, opacity 0.18s ease;
+  transition: color 0.2s cubic-bezier(0.2, 0, 0, 1), opacity 0.2s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .history-item-selection {
@@ -1317,7 +1347,8 @@ h3 {
   font-size: 0.68rem;
   font-weight: 600;
   text-align: left;
-  transition: background-color 0.14s ease, color 0.14s ease;
+  transition: background-color 0.14s ease, color 0.14s ease,
+              transform 0.12s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .history-menu-item:hover {
@@ -1467,7 +1498,9 @@ h3 {
   min-width: 0;
 }
 
+/* The traveling underline is positioned against this strip, not the toolbar. */
 .viewer-tabs {
+  position: relative;
   display: flex;
   flex: none;
   align-items: stretch;
@@ -1499,12 +1532,15 @@ h3 {
 .viewer-tab {
   padding: 0 10px;
   border: 0;
+  /* The 2px band the underline travels along; the accent itself is not painted
+     here, so switching tabs hands the line over instead of switching it on. */
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--muted);
   font-family: "Segoe UI", sans-serif;
   font-size: 0.7rem;
   font-weight: 600;
+  transition: color 0.18s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .viewer-tab:disabled {
@@ -1512,7 +1548,6 @@ h3 {
 }
 
 .viewer-tab.is-active {
-  border-bottom-color: var(--accent);
   color: var(--ink);
 }
 
@@ -1598,9 +1633,7 @@ h3 {
   overflow: hidden;
   border: 1.5px solid var(--border);
   background: var(--surface);
-  contain: layout paint;
-  content-visibility: auto;
-  contain-intrinsic-size: 190px 280px;
+  contain: layout;
 }
 
 .source-page-card[data-in-range="true"] {
@@ -1615,7 +1648,6 @@ h3 {
   justify-content: center;
   min-height: 210px;
   background: #eef0f3;
-  contain: paint;
 }
 
 .source-page-image {
@@ -1624,7 +1656,16 @@ h3 {
   max-height: 360px;
   object-fit: contain;
   background: var(--base);
-  content-visibility: auto;
+}
+
+/* The page render itself opens the enlarged window. */
+.source-page-image-button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
 }
 
 .source-page-range-marker {
@@ -1679,6 +1720,118 @@ h3 {
   background: var(--accent-wash);
   color: var(--accent-hover);
   outline: 0;
+}
+
+/* Enlarged source page: its own floating window over a blurred backdrop, so a
+   page that is too small to read in the grid can be read here. It is painted in
+   a body-level portal above every other surface, and it retires on the backdrop,
+   the close control, or Escape. */
+.source-lightbox {
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 26px;
+  background: rgba(16, 24, 40, 0.36);
+  backdrop-filter: blur(10px) saturate(0.9);
+  -webkit-backdrop-filter: blur(10px) saturate(0.9);
+  animation: sourceLightboxFade 0.16s ease-out;
+}
+
+.source-lightbox-window {
+  display: flex;
+  flex-direction: column;
+  width: min(1080px, 100%);
+  max-height: 100%;
+  margin: 0;
+  overflow: hidden;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--base);
+  box-shadow: 0 28px 64px -18px rgba(16, 24, 40, 0.55);
+  animation: sourceLightboxReveal 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.source-lightbox-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  padding: 6px 6px 6px 14px;
+  border-bottom: 1.5px solid var(--border);
+  background: var(--surface);
+}
+
+.source-lightbox-caption {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: "Geist Mono", monospace;
+  font-size: 0.6rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-lightbox-close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.source-lightbox-close:hover {
+  background: var(--field);
+  color: var(--ink);
+}
+
+.source-lightbox-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: #eef0f3;
+  scrollbar-color: var(--border) transparent;
+  scrollbar-width: thin;
+}
+
+.source-lightbox-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--base);
+}
+
+@keyframes sourceLightboxFade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sourceLightboxReveal {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .results-count {
@@ -2125,6 +2278,8 @@ h3 {
   border-radius: 6px;
   background: var(--ink);
   color: var(--base);
+  transition: border-color 0.15s ease, background-color 0.15s ease,
+              transform 0.12s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .download-button:hover {
@@ -2663,6 +2818,8 @@ h3 {
   background: var(--base);
   color: var(--ink);
   font-size: 0.7rem;
+  transition: border-color 0.15s ease, background-color 0.15s ease,
+              transform 0.12s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .generation-queue-action:hover {
@@ -2818,6 +2975,447 @@ h3 {
   60%       { opacity: 0.16; }
   74%       { opacity: 0; transform: scale(3.4) translate(var(--forge-px, 0), var(--forge-py, -6px)); }
   100%      { opacity: 0; transform: scale(0.5); }
+}
+
+/* ---------------------------------------------------------------------------
+   Motion: every entry and exit is one short, eased move, so the app hands over
+   between states instead of blinking. Nothing here delays a control or hides
+   information - text is readable the instant it arrives - and the reduced-motion
+   block at the end of this file snaps all of it for anyone who asks.
+   --------------------------------------------------------------------------- */
+
+/* The active tab's underline is one element that travels, so switching tabs
+   reads as a single line being handed over rather than two borders blinking. */
+.viewer-tab-underline {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  height: 2px;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.viewer-tab-underline.is-visible {
+  opacity: 1;
+}
+
+/* Transitions are armed only after the first placement has been painted, so the
+   line appears where the tab is instead of wiping across from the left edge. */
+.viewer-tab-underline.is-gliding {
+  transition: transform 0.24s cubic-bezier(0.2, 0, 0, 1),
+              width 0.24s cubic-bezier(0.2, 0, 0, 1),
+              opacity 0.16s cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Whichever panel the viewer is showing settles in from just below. */
+.viewer-scroll > .source-viewer,
+.viewer-scroll > .guide-card,
+.viewer-scroll > .forging-screen,
+.viewer-scroll > .viewer-heading-row,
+.viewer-scroll > .viewer-empty {
+  animation: viewerPanelIn 0.22s cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes viewerPanelIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* A finished request hands the anvil over: it keeps its place over the arriving
+   guide for one short fade instead of cutting on the swap. */
+.viewer-scroll > .forging-screen.is-leaving {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  min-height: 0;
+  background: var(--base);
+  animation: forgingLeave 0.22s cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@keyframes forgingLeave {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+/* The activity wording ahead of the counters eases in when it changes; the
+   counters themselves are left steady so progress never flickers. */
+.forging-detail {
+  animation: noticeIn 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* A guide that has just been added eases into the list, and a status change gets
+   one quiet highlight plus a swapped word instead of a silent change. */
+.history-item {
+  animation: historyItemIn 0.24s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.history-item.is-status-changed {
+  animation: historyItemIn 0.24s cubic-bezier(0.2, 0, 0, 1),
+             historyStatusFlash 0.7s ease-out;
+}
+
+/* A guide on its way out holds its place while it goes, so the list closes the
+   gap after the row has left rather than before. */
+.history-item.is-leaving {
+  animation: historyItemLeave 0.18s cubic-bezier(0.4, 0, 1, 1) both;
+  pointer-events: none;
+}
+
+.history-status-text {
+  animation: statusWordIn 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes historyItemIn {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes historyStatusFlash {
+  from {
+    background-color: var(--accent-wash);
+  }
+
+  to {
+    background-color: transparent;
+  }
+}
+
+@keyframes historyItemLeave {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes statusWordIn {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The guide queue: the panel, its body and each row arrive and retire. */
+.generation-queue {
+  animation: queuePanelIn 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.generation-queue.is-leaving {
+  animation: queuePanelLeave 0.16s cubic-bezier(0.4, 0, 1, 1) both;
+  pointer-events: none;
+}
+
+.generation-queue-body {
+  animation: queueBodyIn 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.generation-queue-row {
+  animation: queueRowIn 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.generation-queue-row.is-leaving {
+  animation: queueRowLeave 0.16s cubic-bezier(0.4, 0, 1, 1) both;
+  pointer-events: none;
+}
+
+@keyframes queuePanelIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes queuePanelLeave {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes queueBodyIn {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes queueRowIn {
+  from {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes queueRowLeave {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+}
+
+/* The two page menus, the enlarged page and the revision popup leave the way
+   they arrived: none of them blinks off. */
+.source-context-menu.is-leaving,
+.history-menu.is-leaving,
+.revision-popup.is-leaving {
+  animation: surfaceLeave 0.16s cubic-bezier(0.4, 0, 1, 1) both;
+  pointer-events: none;
+}
+
+.revision-popup {
+  animation: revisionPopupIn 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes revisionPopupIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes surfaceLeave {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+.source-lightbox.is-leaving {
+  animation: lightboxLeave 0.18s ease-in both;
+  pointer-events: none;
+}
+
+.source-lightbox.is-leaving .source-lightbox-window {
+  animation: lightboxWindowLeave 0.18s cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@keyframes lightboxLeave {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes lightboxWindowLeave {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+}
+
+/* The drop overlay retires with a fade instead of blinking off. */
+.global-drop-indicator.is-leaving {
+  animation: globalDropOut 0.16s ease-in both;
+}
+
+@keyframes globalDropOut {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+/* Startup hands over: the workspace arrives underneath the screen that was
+   showing, which fades over it. One move per launch. */
+.app-shell {
+  animation: workspaceIn 0.26s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.state-screen.is-leaving {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  animation: stateScreenLeave 0.24s cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@keyframes workspaceIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes stateScreenLeave {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+/* A notice - an error, a confirmation, a recovery line - arrives with a short
+   fade so the eye catches it. The space it takes is settled at once. */
+.source-inline-error,
+.setup-error,
+.export-feedback,
+.viewer-work-notice,
+.history-error,
+.history-item-error,
+.source-read-only-note,
+.generation-queue-connection,
+.work-progress {
+  animation: noticeIn 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes noticeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Choosing a custom range opens the two page boxes instead of dropping them in.
+   The clip lives only inside the animation, so a focus ring is never cut once
+   the fields have settled. */
+.pdf-range-fields {
+  animation: rangeFieldsOpen 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes rangeFieldsOpen {
+  from {
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+  }
+
+  to {
+    max-height: 200px;
+    opacity: 1;
+    overflow: hidden;
+  }
+}
+
+/* Image order: the two rows that traded places slide through each other, so one
+   press reads as a move rather than two rows quietly changing their text. */
+.image-row[data-image-move="up"] {
+  animation: imageRowFromBelow 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.image-row[data-image-move="down"] {
+  animation: imageRowFromAbove 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes imageRowFromBelow {
+  from {
+    opacity: 0.35;
+    transform: translateY(55%);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes imageRowFromAbove {
+  from {
+    opacity: 0.35;
+    transform: translateY(-55%);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* One consistent press: every control sits down a hair while it is held. The
+   Forge button keeps the response it already had. */
+.secondary-button:active:not(:disabled),
+.download-button:active,
+.generation-queue-action:active,
+.history-menu-item:active,
+.window-control:active,
+.rail-toggle:active,
+.source-lightbox-close:active,
+.revision-popup-close:active,
+.text-button:active:not(:disabled),
+.icon-button:active:not(:disabled),
+.image-remove-button:active:not(:disabled),
+.source-remove-action:active:not(:disabled),
+.revision-popup-clarify:active {
+  transform: translateY(1px);
 }
 
 @media (prefers-reduced-motion: reduce) {

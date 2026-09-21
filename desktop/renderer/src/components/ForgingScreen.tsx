@@ -51,11 +51,28 @@ const PUFFS: PuffShape[] = [
 export interface ForgingScreenProps {
   /** What the request is doing right now, from the queue row. */
   detail?: string | null;
+  /** True while a finished anvil fades over the guide that has taken over. */
+  leaving?: boolean;
 }
 
-export function ForgingScreen({ detail = null }: ForgingScreenProps) {
+/**
+ * The activity wording in front of the counters. Only this part of the line is
+ * used as a key, so the fade that marks a step change never fires on a counter
+ * tick - a line that blinked every update would read as flicker, not progress.
+ */
+export function progressLabel(detail: string): string {
+  const [label] = detail.split(" · ");
+  return label ?? detail;
+}
+
+export function ForgingScreen({ detail = null, leaving = false }: ForgingScreenProps) {
   return (
-    <div className="forging-screen" role="status" aria-live="polite">
+    <div
+      className={`forging-screen${leaving ? " is-leaving" : ""}`}
+      role="status"
+      aria-live="polite"
+      aria-hidden={leaving ? true : undefined}
+    >
       <svg className="forge-loop" viewBox="0 0 240 190" aria-hidden="true" focusable="false">
         {/* anvil: face, horn, body, waist, base, foot */}
         <path
@@ -101,7 +118,7 @@ export function ForgingScreen({ detail = null }: ForgingScreenProps) {
       <span className="forging-kicker">Study guide</span>
       <strong className="forging-heading">{FORGING_MESSAGE}</strong>
       {detail === null || detail === "" ? null : (
-        <p className="forging-detail">{detail}</p>
+        <p className="forging-detail" key={progressLabel(detail)}>{detail}</p>
       )}
     </div>
   );

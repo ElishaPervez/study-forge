@@ -29,6 +29,8 @@ export interface RevisionPopupProps {
   selectedText: string;
   anchorRect: RevisionRect;
   viewerBounds?: RevisionBounds;
+  /** True while the popup fades out over the guide it was anchored to. */
+  leaving?: boolean;
   onClarify: () => void;
   onUpdate: (instruction: string) => void;
   onClose: () => void;
@@ -125,6 +127,7 @@ export function RevisionPopup({
   selectedText,
   anchorRect,
   viewerBounds = DEFAULT_BOUNDS,
+  leaving = false,
   onClarify,
   onUpdate,
   onClose,
@@ -248,9 +251,10 @@ export function RevisionPopup({
   return (
     <aside
       ref={popupRef}
-      className="revision-popup"
-      role="dialog"
-      aria-label="Revise selected text"
+      className={`revision-popup${leaving ? " is-leaving" : ""}`}
+      role={leaving ? undefined : "dialog"}
+      aria-label={leaving ? undefined : "Revise selected text"}
+      aria-hidden={leaving ? true : undefined}
       data-placement={position.placement}
       style={{
         left: `${position.left}px`,

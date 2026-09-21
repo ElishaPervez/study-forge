@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { QueueRow } from "../api";
+import { useLeavingValue } from "../useLeavingValue";
 
 export const QUIET_AFTER_MS = 20_000;
 export const TICK_MS = 5_000;
+export const QUEUE_PANEL_EXIT_MS = 160;
+export const QUEUE_ROW_EXIT_MS = 160;
 
 const ACTIVITY_LABELS: Record<string, string> = {
   preparing: "Preparing the source",
@@ -144,7 +147,55 @@ export function GenerationQueue({
   const [expanded, setExpanded] = useState(false);
   const [collapsedByUser, setCollapsedByUser] = useState(false);
   const [, setTick] = useState(0);
-  const ordered = useMemo(() => orderQueueRows(rows), [rows]);
+  const [retiredRows, setRetiredRows] = useState<Map<string, QueueRow>>(new Map());
+  const previousRowsRef = useRef<Map<string, QueueRow>>(new Map());
+
+  useEffect(() => {
+    const currentReceipts = new Set(rows.map((row) => row.receipt));
+    const newlyRetired: QueueRow[] = [];
+    for (const [receipt, prevRow] of previousRowsRef.current.entries()) {
+      if (!currentReceipts.has(receipt)) {
+        newlyRetired.push(prevRow);
+      }
+    }
+    const nextMap = new Map<string, QueueRow>();
+    for (const row of rows) {
+      nextMap.set(row.receipt, row);
+    }
+    previousRowsRef.current = nextMap;
+
+    if (newlyRetired.length > 0) {
+      setRetiredRows((prev) => {
+        const next = new Map(prev);
+        newlyRetired.forEach((row) => next.set(row.receipt, row));
+        return next;
+      });
+      const timer = setTimeout(() => {
+        setRetiredRows((prev) => {
+          const next = new Map(prev);
+          newlyRetired.forEach((row) => next.delete(row.receipt));
+          return next;
+        });
+      }, QUEUE_ROW_EXIT_MS);
+      return () => clearTimeout(timer);
+    }
+  }, [rows]);
+
+  const queueSurface = useLeavingValue(
+    rows.length > 0 || retiredRows.size > 0 ? rows : null,
+    QUEUE_PANEL_EXIT_MS,
+  );
+  const activeRows = rows.length > 0 ? rows : (queueSurface.shown ?? []);
+  const allRows = useMemo(() => {
+    const combined = [...activeRows];
+    for (const retired of retiredRows.values()) {
+      if (!combined.some((row) => row.receipt === retired.receipt)) {
+        combined.push(retired);
+      }
+    }
+    return combined;
+  }, [activeRows, retiredRows]);
+  const ordered = useMemo(() => orderQueueRows(allRows), [allRows]);
   const running = ordered.some((row) => row.state === "running");
 
   useEffect(() => {
@@ -160,18 +211,23 @@ export function GenerationQueue({
     return () => window.clearInterval(timer);
   }, [running]);
 
-  if (rows.length === 0) return null;
+  if (queueSurface.shown === null) return null;
 
   const current = now ? now() : Date.now();
-  const summary = queueSummaryText(ordered, connected);
-  const announcement = ordered
+  const summaryRows = rows.length > 0 ? rows : (queueSurface.shown ?? []);
+  const summary = queueSummaryText(orderQueueRows(summaryRows), connected);
+  const announcement = summaryRows
     .filter((row) => row.state === "running")
     .map((row) => `${row.guide_name}: ${activityLabel(row)}`)
     .join(", ");
-  const notices = ordered.filter((row) => row.state === "completed");
+  const notices = summaryRows.filter((row) => row.state === "completed");
 
   return (
-    <section className="generation-queue" aria-label="Guide queue">
+    <section
+      className={`generation-queue${queueSurface.leaving ? " is-leaving" : ""}`}
+      aria-label="Guide queue"
+      aria-hidden={queueSurface.leaving ? true : undefined}
+    >
       <div className="generation-queue-bar">
         <button
           type="button"
@@ -201,49 +257,58 @@ export function GenerationQueue({
             </p>
           )}
           <ul className="generation-queue-list" id="generation-queue-list">
-            {ordered.map((row) => (
-              <li className={`generation-queue-row is-${row.state}`} key={row.receipt}>
-                <p className="generation-queue-head">
-                  <span className="generation-queue-name" title={row.guide_name}>
-                    {row.guide_name}
-                  </span>
-                  <span className="generation-queue-kind">{operationLabel(row)}</span>
-                </p>
-                <p className="generation-queue-detail">
-                  {progressDetail(row, current, quietAfterMs)}
-                </p>
-                {row.error ? (
-                  <p className="generation-queue-error">{row.error}</p>
-                ) : null}
-                <div className="generation-queue-actions">
-                  <button
-                    type="button"
-                    className="generation-queue-action"
-                    onClick={() => onOpenGuide(row.guide_id)}
-                  >
-                    Open
-                  </button>
-                  {row.retry_available ? (
-                    <button
-                      type="button"
-                      className="generation-queue-action"
-                      onClick={() => onRetry(row)}
-                    >
-                      Retry
-                    </button>
+            {ordered.map((row) => {
+              const isLeaving = retiredRows.has(row.receipt);
+              return (
+                <li
+                  className={`generation-queue-row is-${row.state}${isLeaving ? " is-leaving" : ""}`}
+                  key={row.receipt}
+                >
+                  <p className="generation-queue-head">
+                    <span className="generation-queue-name" title={row.guide_name}>
+                      {row.guide_name}
+                    </span>
+                    <span className="generation-queue-kind">{operationLabel(row)}</span>
+                  </p>
+                  <p className="generation-queue-detail">
+                    {progressDetail(row, current, quietAfterMs)}
+                  </p>
+                  {row.error ? (
+                    <p className="generation-queue-error">{row.error}</p>
                   ) : null}
-                  {isActiveRow(row) ? null : (
+                  <div className="generation-queue-actions">
                     <button
                       type="button"
                       className="generation-queue-action"
-                      onClick={() => onDismiss(row.receipt)}
+                      onClick={() => onOpenGuide(row.guide_id)}
+                      disabled={isLeaving}
                     >
-                      Dismiss
+                      Open
                     </button>
-                  )}
-                </div>
-              </li>
-            ))}
+                    {row.retry_available ? (
+                      <button
+                        type="button"
+                        className="generation-queue-action"
+                        onClick={() => onRetry(row)}
+                        disabled={isLeaving}
+                      >
+                        Retry
+                      </button>
+                    ) : null}
+                    {isActiveRow(row) ? null : (
+                      <button
+                        type="button"
+                        className="generation-queue-action"
+                        onClick={() => onDismiss(row.receipt)}
+                        disabled={isLeaving}
+                      >
+                        Dismiss
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
           {notices.length > 0 && onDismissFinished ? (
             <div className="generation-queue-footer">

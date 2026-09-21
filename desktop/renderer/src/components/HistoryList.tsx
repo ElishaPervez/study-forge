@@ -10,6 +10,7 @@ import {
 } from "react";
 
 import type { GuideSummary, HistoryEntry } from "../api";
+import { useLeavingValue } from "../useLeavingValue";
 import {
   HistoryContextMenu,
   historyMenuEntries,
@@ -19,6 +20,10 @@ import {
   type MenuAnchor,
   type MenuViewport,
 } from "./HistoryContextMenu";
+
+export const HISTORY_ITEM_EXIT_MS = 180;
+export const HISTORY_STATUS_FLASH_MS = 700;
+export const HISTORY_MENU_EXIT_MS = 160;
 
 export interface HistoryListProps {
   guides: HistoryEntry[];
@@ -109,9 +114,37 @@ export const HistoryList = memo(function HistoryList({
     anchor: MenuAnchor;
     viewport: MenuViewport;
   } | null>(null);
+  const menuSurface = useLeavingValue(menu, HISTORY_MENU_EXIT_MS);
+  const [leavingGuideIds, setLeavingGuideIds] = useState<Set<string>>(new Set());
+  const [statusChangedIds, setStatusChangedIds] = useState<Set<string>>(new Set());
+  const previousStatusesRef = useRef<Map<string, string>>(new Map());
   const sectionRef = useRef<HTMLElement | null>(null);
   const menuTriggerRef = useRef<HTMLElement | null>(null);
   const orderedGuides = sortHistoryNewestFirst(guides);
+
+  useEffect(() => {
+    const prevMap = previousStatusesRef.current;
+    const changed = new Set<string>();
+    for (const entry of orderedGuides) {
+      if (entry.kind === "legacy") continue;
+      const prevStatus = prevMap.get(entry.guide_id);
+      if (prevStatus !== undefined && prevStatus !== entry.status) {
+        changed.add(entry.guide_id);
+      }
+      prevMap.set(entry.guide_id, entry.status);
+    }
+    if (changed.size > 0) {
+      setStatusChangedIds((current) => new Set([...current, ...changed]));
+      const timer = setTimeout(() => {
+        setStatusChangedIds((current) => {
+          const next = new Set(current);
+          changed.forEach((id) => next.delete(id));
+          return next;
+        });
+      }, HISTORY_STATUS_FLASH_MS);
+      return () => clearTimeout(timer);
+    }
+  }, [orderedGuides]);
 
   const beginRename = (guide: GuideSummary) => {
     setEditingGuideId(guide.guide_id);
@@ -196,9 +229,22 @@ export const HistoryList = memo(function HistoryList({
     const opened = menu;
     closeMenu();
     if (opened === null) return;
-    if (action === "rename") beginRename(opened.guide);
-    else if (action === "delete") void onDelete(opened.guide.guide_id);
-    else void onRetry(opened.guide.guide_id);
+    if (action === "rename") {
+      beginRename(opened.guide);
+    } else if (action === "delete") {
+      const guideId = opened.guide.guide_id;
+      setLeavingGuideIds((current) => new Set(current).add(guideId));
+      setTimeout(() => {
+        void onDelete(guideId);
+        setLeavingGuideIds((current) => {
+          const next = new Set(current);
+          next.delete(guideId);
+          return next;
+        });
+      }, HISTORY_ITEM_EXIT_MS);
+    } else {
+      void onRetry(opened.guide.guide_id);
+    }
   };
 
   // A guide that becomes busy loses its change menu and any rename in progress,
@@ -242,18 +288,20 @@ export const HistoryList = memo(function HistoryList({
             const menuOpen = menu?.guide.guide_id === guide.guide_id;
             const canOpen = historyItemOpensGuide(guide.status, disabled, editing);
             const focusable = canOpen || canOpenMenu;
+            const isLeaving = leavingGuideIds.has(guide.guide_id);
+            const isStatusChanged = statusChangedIds.has(guide.guide_id);
             return (
               <li
-                className={`history-item${canOpen ? " is-openable" : ""}${activeGuideId === guide.guide_id ? " is-active" : ""}${menuOpen ? " is-menu-open" : ""}${busy ? " is-busy" : ""}`}
+                className={`history-item${isLeaving ? " is-leaving" : ""}${isStatusChanged ? " is-status-changed" : ""}${canOpen ? " is-openable" : ""}${activeGuideId === guide.guide_id ? " is-active" : ""}${menuOpen ? " is-menu-open" : ""}${busy ? " is-busy" : ""}`}
                 key={guide.guide_id}
                 data-guide-id={guide.guide_id}
-                tabIndex={focusable ? 0 : undefined}
-                aria-haspopup={canOpenMenu ? "menu" : undefined}
-                aria-expanded={canOpenMenu ? menuOpen : undefined}
-                aria-keyshortcuts={canOpenMenu ? "Shift+F10" : undefined}
-                onClick={() => handleItemClick(guide, canOpen)}
-                onContextMenu={(event) => handleItemContextMenu(event, guide, canOpenMenu)}
-                onKeyDown={(event) => handleItemKeyDown(event, guide, canOpenMenu, canOpen)}
+                tabIndex={isLeaving ? undefined : (focusable ? 0 : undefined)}
+                aria-haspopup={isLeaving ? undefined : (canOpenMenu ? "menu" : undefined)}
+                aria-expanded={isLeaving ? undefined : (canOpenMenu ? menuOpen : undefined)}
+                aria-keyshortcuts={isLeaving ? undefined : (canOpenMenu ? "Shift+F10" : undefined)}
+                onClick={() => !isLeaving && handleItemClick(guide, canOpen)}
+                onContextMenu={(event) => !isLeaving && handleItemContextMenu(event, guide, canOpenMenu)}
+                onKeyDown={(event) => !isLeaving && handleItemKeyDown(event, guide, canOpenMenu, canOpen)}
               >
                 <div className="history-item-main">
                   {editing ? (
@@ -277,7 +325,9 @@ export const HistoryList = memo(function HistoryList({
 
                 <div className={`history-status status-${statusTone(guide.status)}`}>
                   <span className="status-dot" aria-hidden="true" />
-                  <span>{busy ? "Waiting in the queue" : statusLabel(guide.status)}</span>
+                  <span className="history-status-text" key={busy ? "waiting" : guide.status}>
+                    {busy ? "Waiting in the queue" : statusLabel(guide.status)}
+                  </span>
                 </div>
 
                 {guide.error ? <p className="history-item-error">{guide.error}</p> : null}
@@ -290,12 +340,13 @@ export const HistoryList = memo(function HistoryList({
         </ol>
       )}
 
-      {menu !== null ? (
+      {menuSurface.shown !== null ? (
         <HistoryContextMenu
-          guideName={menu.guide.name}
-          entries={historyMenuEntries(menu.guide.status)}
-          anchor={menu.anchor}
-          viewport={menu.viewport}
+          guideName={menuSurface.shown.guide.name}
+          entries={historyMenuEntries(menuSurface.shown.guide.status)}
+          anchor={menuSurface.shown.anchor}
+          viewport={menuSurface.shown.viewport}
+          leaving={menuSurface.leaving}
           onSelect={handleMenuSelect}
           onClose={closeMenu}
         />

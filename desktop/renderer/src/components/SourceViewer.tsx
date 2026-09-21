@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState, type CSSProperties, typ
 import { createPortal } from "react-dom";
 
 import type { GuideSelection } from "../api";
+import { useLeavingValue } from "../useLeavingValue";
 import type { PdfSelection } from "./PdfRangeSelector";
 import type { ImageFile } from "./ImageGroupEditor";
 import type { SourceDraft } from "./SourceIntake";
@@ -16,6 +17,9 @@ export interface SourceViewerProps {
 
 export const SOURCE_READ_FAILURE_MESSAGE =
   "The stored source could not be read. Choose a different source in Source.";
+
+export const SOURCE_MENU_EXIT_MS = 160;
+export const SOURCE_LIGHTBOX_EXIT_MS = 180;
 
 export interface SourceMenuAnchor {
   x: number;
@@ -170,11 +174,36 @@ function imageAlt(file: ImageFile, ordinal: number): string {
   return `Image ${ordinal}: ${file.name}`;
 }
 
+/** The one page or image that is currently open in its own enlarged window. */
+export interface EnlargedPage {
+  ordinal: number;
+  alt: string;
+  caption: string;
+}
+
+export function enlargedPdfPage(pageNumber: number): EnlargedPage {
+  return { ordinal: pageNumber, alt: `Page ${pageNumber}`, caption: `Page ${pageNumber}` };
+}
+
+export function enlargedImagePage(file: ImageFile, ordinal: number): EnlargedPage {
+  return { ordinal, alt: imageAlt(file, ordinal), caption: `${ordinal}. ${file.name}` };
+}
+
+/**
+ * The enlarged page floats in its own window over a blurred backdrop, so a press
+ * that lands on the backdrop itself - and never on that window - retires it.
+ */
+export function isOutsideEnlargedPage(backdrop: HTMLElement | null, target: Node | null): boolean {
+  if (backdrop === null || target === null) return false;
+  return target === backdrop;
+}
+
 interface PdfPageCardProps {
   source: SourceDraft;
   pageNumber: number;
   inRange: boolean;
   onContextMenu: (event: MouseEvent<HTMLElement>, pageNumber: number) => void;
+  onEnlarge: (page: EnlargedPage) => void;
   onSourceError?: (message: string) => void;
 }
 
@@ -183,6 +212,7 @@ const PdfPageCard = memo(function PdfPageCard({
   pageNumber,
   inRange,
   onContextMenu,
+  onEnlarge,
   onSourceError,
 }: PdfPageCardProps) {
   return (
@@ -193,14 +223,21 @@ const PdfPageCard = memo(function PdfPageCard({
       onContextMenu={(event) => onContextMenu(event, pageNumber)}
     >
       <div className="source-page-image-wrap">
-        <img
-          className="source-page-image"
-          src={sourcePreviewUrl(source, pageNumber)}
-          alt={`Page ${pageNumber}`}
-          loading="lazy"
-          decoding="async"
-          onError={() => onSourceError?.(SOURCE_READ_FAILURE_MESSAGE)}
-        />
+        <button
+          type="button"
+          className="source-page-image-button"
+          aria-label={`Enlarge page ${pageNumber}`}
+          title="Click to enlarge"
+          onClick={() => onEnlarge(enlargedPdfPage(pageNumber))}
+        >
+          <img
+            className="source-page-image"
+            src={sourcePreviewUrl(source, pageNumber)}
+            alt={`Page ${pageNumber}`}
+            loading="lazy"
+            onError={() => onSourceError?.(SOURCE_READ_FAILURE_MESSAGE)}
+          />
+        </button>
         {inRange ? <span className="source-page-range-marker">In range</span> : null}
       </div>
       <figcaption>Page {pageNumber}</figcaption>
@@ -212,6 +249,7 @@ interface ImagePageCardProps {
   source: SourceDraft;
   file: ImageFile;
   imageNumber: number;
+  onEnlarge: (page: EnlargedPage) => void;
   onSourceError?: (message: string) => void;
 }
 
@@ -219,19 +257,27 @@ const ImagePageCard = memo(function ImagePageCard({
   source,
   file,
   imageNumber,
+  onEnlarge,
   onSourceError,
 }: ImagePageCardProps) {
   return (
     <figure className="source-page-card source-image-card">
       <div className="source-page-image-wrap">
-        <img
-          className="source-page-image"
-          src={sourcePreviewUrl(source, imageNumber)}
-          alt={imageAlt(file, imageNumber)}
-          loading="lazy"
-          decoding="async"
-          onError={() => onSourceError?.(SOURCE_READ_FAILURE_MESSAGE)}
-        />
+        <button
+          type="button"
+          className="source-page-image-button"
+          aria-label={`Enlarge image ${imageNumber}: ${file.name}`}
+          title="Click to enlarge"
+          onClick={() => onEnlarge(enlargedImagePage(file, imageNumber))}
+        >
+          <img
+            className="source-page-image"
+            src={sourcePreviewUrl(source, imageNumber)}
+            alt={imageAlt(file, imageNumber)}
+            loading="lazy"
+            onError={() => onSourceError?.(SOURCE_READ_FAILURE_MESSAGE)}
+          />
+        </button>
       </div>
       <figcaption>{imageNumber}. {file.name}</figcaption>
     </figure>
@@ -247,7 +293,12 @@ export const SourceViewer = memo(function SourceViewer({
 }: SourceViewerProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [measuredMenuSize, setMeasuredMenuSize] = useState<SourceMenuSize | null>(null);
+  const [enlargedPage, setEnlargedPage] = useState<EnlargedPage | null>(null);
+  const contextMenuSurface = useLeavingValue(contextMenu, SOURCE_MENU_EXIT_MS);
+  const enlargedPageSurface = useLeavingValue(enlargedPage, SOURCE_LIGHTBOX_EXIT_MS);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const lightboxRef = useRef<HTMLDivElement | null>(null);
+  const lightboxCloseRef = useRef<HTMLButtonElement | null>(null);
   const viewerSelection: GuideSelection = source.kind === "pdf"
     && source.pageCount !== null
     && selection.mode !== "images"
@@ -258,6 +309,31 @@ export const SourceViewer = memo(function SourceViewer({
   useEffect(() => {
     setContextMenu(null);
   }, [resetKey, disabled]);
+
+  // The enlarged window follows the source, not the work state: swapping the
+  // source or its image order retires it, while a queued request leaves the
+  // pages readable.
+  useEffect(() => {
+    setEnlargedPage(null);
+  }, [resetKey]);
+
+  const handleEnlarge = useCallback((page: EnlargedPage) => {
+    setContextMenu(null);
+    setEnlargedPage(page);
+  }, []);
+
+  const closeEnlargedPage = useCallback(() => setEnlargedPage(null), []);
+
+  useEffect(() => {
+    if (enlargedPage === null) return;
+    // Opening hands over the keyboard, so Escape works before anything is clicked.
+    lightboxCloseRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setEnlargedPage(null);
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [enlargedPage]);
 
   const handleContextMenu = useCallback((event: MouseEvent<HTMLElement>, pageNumber: number) => {
     event.preventDefault();
@@ -313,11 +389,12 @@ export const SourceViewer = memo(function SourceViewer({
     };
   }, [contextMenu]);
 
-  const menuPlacement: SourceMenuPlacement | null = contextMenu === null
+  const activeMenu = contextMenuSurface.shown;
+  const menuPlacement: SourceMenuPlacement | null = activeMenu === null
     ? null
     : placeSourceMenu(
-      contextMenu.anchor,
-      contextMenu.viewport,
+      activeMenu.anchor,
+      activeMenu.viewport,
       measuredMenuSize ?? UNMEASURED_SOURCE_MENU_SIZE,
     );
   const menuStyle: CSSProperties | undefined = menuPlacement === null
@@ -338,6 +415,7 @@ export const SourceViewer = memo(function SourceViewer({
                 pageNumber={pageNumber}
                 inRange={inRange}
                 onContextMenu={handleContextMenu}
+                onEnlarge={handleEnlarge}
                 onSourceError={onSourceError}
               />
             );
@@ -353,6 +431,7 @@ export const SourceViewer = memo(function SourceViewer({
                 source={source}
                 file={file}
                 imageNumber={imageNumber}
+                onEnlarge={handleEnlarge}
                 onSourceError={onSourceError}
               />
             );
@@ -360,22 +439,84 @@ export const SourceViewer = memo(function SourceViewer({
         </div>
       )}
 
-      {contextMenu !== null && source.kind === "pdf"
+      {contextMenuSurface.shown !== null && source.kind === "pdf"
         ? createPortal(
           <div
             ref={menuRef}
-            className="source-context-menu"
-            role="menu"
-            aria-label={`Page ${contextMenu.pageNumber} actions`}
+            className={`source-context-menu${contextMenuSurface.leaving ? " is-leaving" : ""}`}
+            role={contextMenuSurface.leaving ? undefined : "menu"}
+            aria-label={contextMenuSurface.leaving ? undefined : `Page ${contextMenuSurface.shown.pageNumber} actions`}
+            aria-hidden={contextMenuSurface.leaving ? true : undefined}
             style={menuStyle}
             onContextMenu={(event) => event.preventDefault()}
           >
-            <button type="button" role="menuitem" onClick={() => handleEndpoint("first")}>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => handleEndpoint("first")}
+              tabIndex={contextMenuSurface.leaving ? -1 : undefined}
+            >
               Set as first page
             </button>
-            <button type="button" role="menuitem" onClick={() => handleEndpoint("last")}>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => handleEndpoint("last")}
+              tabIndex={contextMenuSurface.leaving ? -1 : undefined}
+            >
               Set as last page
             </button>
+          </div>,
+          document.body,
+        )
+        : null}
+
+      {enlargedPageSurface.shown !== null
+        ? createPortal(
+          <div
+            ref={lightboxRef}
+            className={`source-lightbox${enlargedPageSurface.leaving ? " is-leaving" : ""}`}
+            role="presentation"
+            aria-hidden={enlargedPageSurface.leaving ? true : undefined}
+            onMouseDown={(event) => {
+              if (enlargedPageSurface.leaving) return;
+              if (isOutsideEnlargedPage(lightboxRef.current, event.target as Node | null)) {
+                closeEnlargedPage();
+              }
+            }}
+          >
+            <figure
+              className="source-lightbox-window"
+              role={enlargedPageSurface.leaving ? undefined : "dialog"}
+              aria-modal={enlargedPageSurface.leaving ? undefined : "true"}
+              aria-label={enlargedPageSurface.leaving ? undefined : `Enlarged ${enlargedPageSurface.shown.caption}`}
+            >
+              <div className="source-lightbox-bar">
+                <p className="source-lightbox-caption">{enlargedPageSurface.shown.caption}</p>
+                <button
+                  ref={lightboxCloseRef}
+                  type="button"
+                  className="source-lightbox-close"
+                  aria-label="Close enlarged page"
+                  title="Close"
+                  onClick={closeEnlargedPage}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="source-lightbox-body">
+                <img
+                  className="source-lightbox-image"
+                  src={sourcePreviewUrl(source, enlargedPageSurface.shown.ordinal)}
+                  alt={enlargedPageSurface.shown.alt}
+                  decoding="async"
+                  onError={() => {
+                    closeEnlargedPage();
+                    onSourceError?.(SOURCE_READ_FAILURE_MESSAGE);
+                  }}
+                />
+              </div>
+            </figure>
           </div>,
           document.body,
         )
