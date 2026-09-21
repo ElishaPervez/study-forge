@@ -56,7 +56,11 @@ async function draw(source: SourceDraft, disabled = false): Promise<void> {
 }
 
 function enlargedOverlay(): HTMLElement | null {
-  return document.body.querySelector<HTMLElement>(".source-lightbox");
+  return document.body.querySelector<HTMLElement>(".source-lightbox:not(.is-leaving)");
+}
+
+function leavingOverlay(): HTMLElement | null {
+  return document.body.querySelector<HTMLElement>(".source-lightbox.is-leaving");
 }
 
 function enlargedBackdrop(): HTMLElement {
@@ -138,6 +142,7 @@ describe("SourceViewer enlarged pages", () => {
     await pressOn(enlargedBackdrop());
 
     expect(enlargedOverlay()).toBeNull();
+    expect(leavingOverlay()).not.toBeNull();
   });
 
   it("keeps the enlarged window open when the window itself is pressed", async () => {
@@ -156,6 +161,7 @@ describe("SourceViewer enlarged pages", () => {
     });
 
     expect(enlargedOverlay()).toBeNull();
+    expect(leavingOverlay()).not.toBeNull();
   });
 
   it("closes the enlarged window with Escape", async () => {
@@ -166,6 +172,7 @@ describe("SourceViewer enlarged pages", () => {
     });
 
     expect(enlargedOverlay()).toBeNull();
+    expect(leavingOverlay()).not.toBeNull();
   });
 
   it("leaves the enlarged window open for keys that are not Escape", async () => {

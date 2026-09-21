@@ -110,6 +110,7 @@ export interface HistoryContextMenuProps {
   entries: HistoryMenuEntry[];
   anchor: MenuAnchor;
   viewport: MenuViewport;
+  leaving?: boolean;
   onSelect: (action: HistoryMenuAction) => void;
   onClose: () => void;
 }
@@ -119,6 +120,7 @@ export function HistoryContextMenu({
   entries,
   anchor,
   viewport,
+  leaving = false,
   onSelect,
   onClose,
 }: HistoryContextMenuProps) {
@@ -184,9 +186,10 @@ export function HistoryContextMenu({
   return (
     <div
       ref={menuRef}
-      className="history-menu"
-      role="menu"
-      aria-label={`Guide options for ${guideName}`}
+      className={`history-menu${leaving ? " is-leaving" : ""}`}
+      role={leaving ? undefined : "menu"}
+      aria-label={leaving ? undefined : `Guide options for ${guideName}`}
+      aria-hidden={leaving ? true : undefined}
       style={{ left: `${placement.left}px`, top: `${placement.top}px` }}
       onKeyDown={handleKeyDown}
       onContextMenu={(event) => event.preventDefault()}

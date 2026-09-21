@@ -53,9 +53,9 @@ export function globalDropOverlayVisible(session: GlobalDropSession): boolean {
   return session.depth > 0 && session.containsFiles;
 }
 
-export function GlobalDropIndicator() {
+export function GlobalDropIndicator({ leaving = false }: { leaving?: boolean } = {}) {
   return (
-    <div className="global-drop-indicator" aria-hidden="true">
+    <div className={`global-drop-indicator${leaving ? " is-leaving" : ""}`} aria-hidden="true">
       <div className="global-drop-frame">
         <div className="global-drop-copy">
           <p className="section-label">Study Forge</p>

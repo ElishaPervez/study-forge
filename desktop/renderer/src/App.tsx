@@ -33,6 +33,7 @@ import {
 } from "./components/SourceIntake";
 import type { ImageFile } from "./components/ImageGroupEditor";
 import { GlobalDropIndicator, useGlobalFileDrop } from "./useGlobalFileDrop";
+import { useLeavingValue } from "./useLeavingValue";
 import { traceElapsedMs, traceLog, traceNow } from "./traceLog";
 
 type StartupState = "starting" | "ready" | "error";
@@ -70,6 +71,25 @@ export function StartupErrorPanel({
         Try again
       </button>
       <p className="state-footnote">The source stays on this computer.</p>
+    </main>
+  );
+}
+
+/**
+ * The screen shown while the local service starts. It is also the screen that
+ * fades over the arriving workspace, so the launch hands over instead of cutting.
+ */
+export function StartupWaitingPanel({ leaving = false }: { leaving?: boolean } = {}) {
+  return (
+    <main
+      className={`state-screen${leaving ? " is-leaving" : ""}`}
+      aria-live={leaving ? undefined : "polite"}
+      aria-hidden={leaving ? true : undefined}
+    >
+      <div className="state-mark" aria-hidden="true">S</div>
+      <p className="section-label">Study Forge</p>
+      <h1>Starting the local workspace...</h1>
+      <p>The desktop service is getting ready. Your source stays on this computer.</p>
     </main>
   );
 }
@@ -310,11 +330,14 @@ export function SidebarToggleIcon({ isCompact }: { isCompact: boolean }) {
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
       <rect x="1.5" y="1.5" width="11" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.2" />
       <line x1="5.2" y1="1.5" x2="5.2" y2="12.5" stroke="currentColor" strokeWidth="1.2" />
-      {isCompact ? (
-        <path d="M7.8 5.2L9.6 7L7.8 8.8" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-      ) : (
+      {/* Both chevrons stay in the icon so the control turns: the one being left
+          fades back a quarter turn while the standing one swings in. */}
+      <g className={`rail-toggle-chevron${isCompact ? " is-hidden" : ""}`}>
         <path d="M9.6 5.2L7.8 7L9.6 8.8" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-      )}
+      </g>
+      <g className={`rail-toggle-chevron${isCompact ? "" : " is-hidden"}`}>
+        <path d="M7.8 5.2L9.6 7L7.8 8.8" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+      </g>
     </svg>
   );
 }
@@ -342,6 +365,40 @@ export const SidebarToggle = memo(function SidebarToggle({
 
 export type ViewerTab = "source" | "guide";
 
+export interface UnderlineRect {
+  left: number;
+  width: number;
+}
+
+/**
+ * Every panel that retires instead of vanishing holds its place for one short
+ * fade; these are the fade durations, and each matches its rule in styles.css.
+ */
+export const FORGE_EXIT_MS = 220;
+export const REVISION_EXIT_MS = 160;
+export const STARTUP_EXIT_MS = 240;
+export const DROP_OVERLAY_EXIT_MS = 160;
+
+/**
+ * The active tab's underline is drawn once and moved, so a tab switch reads as
+ * one line travelling between the labels instead of two borders blinking. Both
+ * rects are viewport coordinates, so their difference is the tab's offset inside
+ * the strip.
+ */
+export function tabUnderlinePlacement(tabRect: UnderlineRect, stripLeft: number): UnderlineRect {
+  return { left: tabRect.left - stripLeft, width: tabRect.width };
+}
+
+/** Runs a callback after the next paint; jsdom and older engines still have rAF. */
+function afterNextFrame(callback: () => void): () => void {
+  if (typeof requestAnimationFrame === "function") {
+    const frame = requestAnimationFrame(callback);
+    return () => cancelAnimationFrame(frame);
+  }
+  const timer = setTimeout(callback, 16);
+  return () => clearTimeout(timer);
+}
+
 export function ViewerTabs({
   hasJob,
   hasSource = hasJob,
@@ -358,9 +415,54 @@ export function ViewerTabs({
   const canChangeTabs = onTabChange !== undefined;
   const sourceIsActive = activeTab === "source" && hasSource;
   const guideIsActive = activeTab === "guide" && hasJob;
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const sourceTabRef = useRef<HTMLButtonElement | null>(null);
+  const guideTabRef = useRef<HTMLButtonElement | null>(null);
+  const [underline, setUnderline] = useState<UnderlineRect | null>(null);
+  const [underlineGlides, setUnderlineGlides] = useState(false);
+
+  const measureUnderline = useCallback(() => {
+    const strip = stripRef.current;
+    const activeButton = guideIsActive ? guideTabRef.current : sourceTabRef.current;
+    if (strip === null || activeButton === null) return;
+    const placement = tabUnderlinePlacement(
+      activeButton.getBoundingClientRect(),
+      strip.getBoundingClientRect().left,
+    );
+    setUnderline((current) => (
+      current !== null && current.left === placement.left && current.width === placement.width
+        ? current
+        : placement
+    ));
+  }, [guideIsActive]);
+
+  useEffect(() => {
+    measureUnderline();
+    window.addEventListener("resize", measureUnderline);
+    if (typeof ResizeObserver === "undefined") {
+      return () => window.removeEventListener("resize", measureUnderline);
+    }
+    // The strip's own width changes when the label font swaps in, which is the
+    // other moment a tab moves without any state changing.
+    const observer = new ResizeObserver(measureUnderline);
+    if (stripRef.current !== null) observer.observe(stripRef.current);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measureUnderline);
+    };
+  }, [measureUnderline]);
+
+  // The first placement is painted without a transition, so the line appears
+  // under the tab it belongs to instead of wiping in from the strip's edge.
+  useEffect(() => {
+    if (underline === null || underlineGlides) return;
+    return afterNextFrame(() => setUnderlineGlides(true));
+  }, [underline, underlineGlides]);
+
   return (
-    <div className="viewer-tabs" role="tablist" aria-label="Viewer tabs">
+    <div className="viewer-tabs" role="tablist" aria-label="Viewer tabs" ref={stripRef}>
       <button
+        ref={sourceTabRef}
         type="button"
         className={`viewer-tab${sourceIsActive ? " is-active" : ""}`}
         role="tab"
@@ -371,6 +473,7 @@ export function ViewerTabs({
         Source
       </button>
       <button
+        ref={guideTabRef}
         type="button"
         className={`viewer-tab${guideIsActive ? " is-active" : ""}`}
         role="tab"
@@ -380,6 +483,17 @@ export function ViewerTabs({
       >
         Study guide
       </button>
+      <span
+        className={`viewer-tab-underline${sourceIsActive || guideIsActive ? " is-visible" : ""}${
+          underlineGlides ? " is-gliding" : ""
+        }`}
+        style={underline === null ? undefined : {
+          transform: `translateX(${underline.left}px)`,
+          width: `${underline.width}px`,
+        }}
+        role="presentation"
+        aria-hidden="true"
+      />
     </div>
   );
 }
@@ -753,6 +867,16 @@ export function App() {
   const selectedQueueRow = queueRowForGuide(queue.rows, guide?.guide_id ?? null);
   const selectedGuideNotice = queueRowNotice(selectedQueueRow);
   const forgingRow = guideIsForging(selectedQueueRow, guide) ? selectedQueueRow : null;
+  const forgingDetail = forgingRow === null ? null : progressDetail(forgingRow);
+  // Surfaces that retire instead of vanishing hold their place for one short
+  // fade: the anvil that has just finished, the revision popup, and the startup
+  // screen. `shown` is what to draw, `leaving` says whether it is on its way out.
+  const forgeHandover = useLeavingValue(forgingDetail, FORGE_EXIT_MS);
+  const revisionSurface = useLeavingValue(revisionSelection, REVISION_EXIT_MS);
+  const startupScreen = useLeavingValue(
+    startupState === "ready" ? null : startupState,
+    STARTUP_EXIT_MS,
+  );
   const canForge = canForgeStudyGuide(
     startupState === "ready",
     api !== null,
@@ -863,6 +987,10 @@ export function App() {
     disabled: startupState !== "ready" || sourceBusy,
     onFilesDropped: handleWindowFilesDropped,
   });
+  const dropOverlay = useLeavingValue(
+    globalDropOverlayVisible ? true : null,
+    DROP_OVERLAY_EXIT_MS,
+  );
 
   const handleImagesChange = (files: ImageFile[]) => {
     if (api === null || source === null || source.kind !== "images" || sourceControlsDisabled) {
@@ -1315,14 +1443,7 @@ export function App() {
   };
 
   if (startupState === "starting") {
-    return (
-      <main className="state-screen" aria-live="polite">
-        <div className="state-mark" aria-hidden="true">S</div>
-        <p className="section-label">Study Forge</p>
-        <h1>Starting the local workspace...</h1>
-        <p>The desktop service is getting ready. Your source stays on this computer.</p>
-      </main>
-    );
+    return <StartupWaitingPanel />;
   }
 
   if (startupState === "error") {
@@ -1469,7 +1590,7 @@ export function App() {
                   onSourceError={handleSourceError}
                 />
               ) : activeTab === "guide" && guide !== null && forgingRow !== null ? (
-                <ForgingScreen detail={progressDetail(forgingRow)} />
+                <ForgingScreen detail={forgeHandover.shown} />
               ) : activeTab === "guide" && guide !== null ? (
                 <>
                 {selectedGuideNotice !== null ? (
@@ -1484,17 +1605,21 @@ export function App() {
                   onSelection={handleGuideSelection}
                   revisionBusy={selectedGuideReadOnly}
                   reselectText={reselectText}
-                  revisionPopup={revisionSelection === null ? undefined : (
+                  revisionPopup={revisionSurface.shown === null ? undefined : (
                     <RevisionPopup
-                      selectedText={revisionSelection.selectedText}
-                      anchorRect={revisionSelection.anchorRect}
-                      viewerBounds={revisionSelection.viewerBounds}
+                      selectedText={revisionSurface.shown.selectedText}
+                      anchorRect={revisionSurface.shown.anchorRect}
+                      viewerBounds={revisionSurface.shown.viewerBounds}
+                      leaving={revisionSurface.leaving}
                       onClarify={() => void handleRevision("clarify", CLARIFY_REVISION_INSTRUCTION)}
                       onUpdate={(instruction) => void handleRevision("custom", instruction)}
                       onClose={() => setRevisionSelection(null)}
                     />
                   )}
                 />
+                {forgeHandover.leaving ? (
+                  <ForgingScreen detail={forgeHandover.shown} leaving />
+                ) : null}
                 </>
               ) : (
                 <section className="viewer-empty" aria-labelledby="empty-viewer-heading">
@@ -1510,8 +1635,11 @@ export function App() {
           </section>
         </main>
       </div>
-      {globalDropOverlayVisible ? <GlobalDropIndicator /> : null}
+      {dropOverlay.shown ? <GlobalDropIndicator leaving={dropOverlay.leaving} /> : null}
     </section>
+    {startupScreen.leaving && startupScreen.shown === "starting" ? (
+      <StartupWaitingPanel leaving />
+    ) : null}
     <GenerationQueue
       rows={queue.rows}
       connected={queue.connected}

@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState, type CSSProperties, typ
 import { createPortal } from "react-dom";
 
 import type { GuideSelection } from "../api";
+import { useLeavingValue } from "../useLeavingValue";
 import type { PdfSelection } from "./PdfRangeSelector";
 import type { ImageFile } from "./ImageGroupEditor";
 import type { SourceDraft } from "./SourceIntake";
@@ -16,6 +17,9 @@ export interface SourceViewerProps {
 
 export const SOURCE_READ_FAILURE_MESSAGE =
   "The stored source could not be read. Choose a different source in Source.";
+
+export const SOURCE_MENU_EXIT_MS = 160;
+export const SOURCE_LIGHTBOX_EXIT_MS = 180;
 
 export interface SourceMenuAnchor {
   x: number;
@@ -231,7 +235,6 @@ const PdfPageCard = memo(function PdfPageCard({
             src={sourcePreviewUrl(source, pageNumber)}
             alt={`Page ${pageNumber}`}
             loading="lazy"
-            decoding="async"
             onError={() => onSourceError?.(SOURCE_READ_FAILURE_MESSAGE)}
           />
         </button>
@@ -272,7 +275,6 @@ const ImagePageCard = memo(function ImagePageCard({
             src={sourcePreviewUrl(source, imageNumber)}
             alt={imageAlt(file, imageNumber)}
             loading="lazy"
-            decoding="async"
             onError={() => onSourceError?.(SOURCE_READ_FAILURE_MESSAGE)}
           />
         </button>
@@ -292,6 +294,8 @@ export const SourceViewer = memo(function SourceViewer({
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [measuredMenuSize, setMeasuredMenuSize] = useState<SourceMenuSize | null>(null);
   const [enlargedPage, setEnlargedPage] = useState<EnlargedPage | null>(null);
+  const contextMenuSurface = useLeavingValue(contextMenu, SOURCE_MENU_EXIT_MS);
+  const enlargedPageSurface = useLeavingValue(enlargedPage, SOURCE_LIGHTBOX_EXIT_MS);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const lightboxRef = useRef<HTMLDivElement | null>(null);
   const lightboxCloseRef = useRef<HTMLButtonElement | null>(null);
@@ -385,11 +389,12 @@ export const SourceViewer = memo(function SourceViewer({
     };
   }, [contextMenu]);
 
-  const menuPlacement: SourceMenuPlacement | null = contextMenu === null
+  const activeMenu = contextMenuSurface.shown;
+  const menuPlacement: SourceMenuPlacement | null = activeMenu === null
     ? null
     : placeSourceMenu(
-      contextMenu.anchor,
-      contextMenu.viewport,
+      activeMenu.anchor,
+      activeMenu.viewport,
       measuredMenuSize ?? UNMEASURED_SOURCE_MENU_SIZE,
     );
   const menuStyle: CSSProperties | undefined = menuPlacement === null
@@ -434,20 +439,31 @@ export const SourceViewer = memo(function SourceViewer({
         </div>
       )}
 
-      {contextMenu !== null && source.kind === "pdf"
+      {contextMenuSurface.shown !== null && source.kind === "pdf"
         ? createPortal(
           <div
             ref={menuRef}
-            className="source-context-menu"
-            role="menu"
-            aria-label={`Page ${contextMenu.pageNumber} actions`}
+            className={`source-context-menu${contextMenuSurface.leaving ? " is-leaving" : ""}`}
+            role={contextMenuSurface.leaving ? undefined : "menu"}
+            aria-label={contextMenuSurface.leaving ? undefined : `Page ${contextMenuSurface.shown.pageNumber} actions`}
+            aria-hidden={contextMenuSurface.leaving ? true : undefined}
             style={menuStyle}
             onContextMenu={(event) => event.preventDefault()}
           >
-            <button type="button" role="menuitem" onClick={() => handleEndpoint("first")}>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => handleEndpoint("first")}
+              tabIndex={contextMenuSurface.leaving ? -1 : undefined}
+            >
               Set as first page
             </button>
-            <button type="button" role="menuitem" onClick={() => handleEndpoint("last")}>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => handleEndpoint("last")}
+              tabIndex={contextMenuSurface.leaving ? -1 : undefined}
+            >
               Set as last page
             </button>
           </div>,
@@ -455,13 +471,15 @@ export const SourceViewer = memo(function SourceViewer({
         )
         : null}
 
-      {enlargedPage !== null
+      {enlargedPageSurface.shown !== null
         ? createPortal(
           <div
             ref={lightboxRef}
-            className="source-lightbox"
+            className={`source-lightbox${enlargedPageSurface.leaving ? " is-leaving" : ""}`}
             role="presentation"
+            aria-hidden={enlargedPageSurface.leaving ? true : undefined}
             onMouseDown={(event) => {
+              if (enlargedPageSurface.leaving) return;
               if (isOutsideEnlargedPage(lightboxRef.current, event.target as Node | null)) {
                 closeEnlargedPage();
               }
@@ -469,12 +487,12 @@ export const SourceViewer = memo(function SourceViewer({
           >
             <figure
               className="source-lightbox-window"
-              role="dialog"
-              aria-modal="true"
-              aria-label={`Enlarged ${enlargedPage.caption}`}
+              role={enlargedPageSurface.leaving ? undefined : "dialog"}
+              aria-modal={enlargedPageSurface.leaving ? undefined : "true"}
+              aria-label={enlargedPageSurface.leaving ? undefined : `Enlarged ${enlargedPageSurface.shown.caption}`}
             >
               <div className="source-lightbox-bar">
-                <p className="source-lightbox-caption">{enlargedPage.caption}</p>
+                <p className="source-lightbox-caption">{enlargedPageSurface.shown.caption}</p>
                 <button
                   ref={lightboxCloseRef}
                   type="button"
@@ -489,8 +507,8 @@ export const SourceViewer = memo(function SourceViewer({
               <div className="source-lightbox-body">
                 <img
                   className="source-lightbox-image"
-                  src={sourcePreviewUrl(source, enlargedPage.ordinal)}
-                  alt={enlargedPage.alt}
+                  src={sourcePreviewUrl(source, enlargedPageSurface.shown.ordinal)}
+                  alt={enlargedPageSurface.shown.alt}
                   decoding="async"
                   onError={() => {
                     closeEnlargedPage();
